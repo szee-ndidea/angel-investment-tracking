@@ -216,20 +216,9 @@ def format_currency_blank(value) -> str:
 
 
 def format_multiple(value) -> str:
-    if pd.isna(value):
+    if value is None or pd.isna(value):
         return "N/A"
     return f"{value:.2f}x"
-
-
-def add_calculated_fields(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df.copy()
-
-    out = df.copy()
-    out["Total Invested"] = out["Gross Investment"] + out["Fees"]
-    out["Gain / Loss"] = out["Current Value"] - out["Total Invested"]
-    out["MOIC"] = out["Current Value"] / out["Total Invested"].replace(0, pd.NA)
-    return out
 
 
 def investment_only_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -244,15 +233,28 @@ def fee_only_df(df: pd.DataFrame) -> pd.DataFrame:
     return df[df["Instrument Type"].fillna("") == "Fee"].copy()
 
 
+def add_calculated_fields(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+
+    out = df.copy()
+    out["Net Invested"] = out["Gross Investment"] - out["Fees"]
+    out["Gain / Loss"] = out["Current Value"] - out["Net Invested"]
+    out["MOIC"] = out["Current Value"] / out["Gross Investment"].replace(0, pd.NA)
+    out["TVPI"] = out["Current Value"] / out["Net Invested"].replace(0, pd.NA)
+    return out
+
+
 def portfolio_metrics(df: pd.DataFrame) -> dict:
     if df.empty:
         return {
             "gross_investment": 0.0,
             "fees": 0.0,
-            "total_invested": 0.0,
+            "net_invested": 0.0,
             "current_value": 0.0,
             "gain_loss": 0.0,
             "positions": 0,
+            "transactions": 0,
             "moic": pd.NA,
             "tvpi": pd.NA,
         }
@@ -261,20 +263,22 @@ def portfolio_metrics(df: pd.DataFrame) -> dict:
 
     gross_investment = invest_df["Gross Investment"].fillna(0).sum()
     fees = df["Fees"].fillna(0).sum()
-    total_invested = gross_investment + fees
+    net_invested = gross_investment - fees
     current_value = invest_df["Current Value"].fillna(0).sum()
-    gain_loss = current_value - total_invested
+    gain_loss = current_value - net_invested
     positions = invest_df["Company"].replace("", pd.NA).dropna().nunique()
-    moic = current_value / total_invested if total_invested != 0 else pd.NA
-    tvpi = current_value / total_invested if total_invested != 0 else pd.NA
+    transactions = len(df)
+    moic = current_value / gross_investment if gross_investment != 0 else pd.NA
+    tvpi = current_value / net_invested if net_invested != 0 else pd.NA
 
     return {
         "gross_investment": gross_investment,
         "fees": fees,
-        "total_invested": total_invested,
+        "net_invested": net_invested,
         "current_value": current_value,
         "gain_loss": gain_loss,
         "positions": positions,
+        "transactions": transactions,
         "moic": moic,
         "tvpi": tvpi,
     }
@@ -305,12 +309,12 @@ def company_summary(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
 
-    summary["total_invested"] = summary["gross_investment"] + summary["fees"]
-    summary["gain_loss"] = summary["current_value"] - summary["total_invested"]
-    summary["moic"] = summary["current_value"] / summary["total_invested"].replace(0, pd.NA)
-    summary["tvpi"] = summary["current_value"] / summary["total_invested"].replace(0, pd.NA)
+    summary["net_invested"] = summary["gross_investment"] - summary["fees"]
+    summary["gain_loss"] = summary["current_value"] - summary["net_invested"]
+    summary["moic"] = summary["current_value"] / summary["gross_investment"].replace(0, pd.NA)
+    summary["tvpi"] = summary["current_value"] / summary["net_invested"].replace(0, pd.NA)
 
-    summary = summary.sort_values(["total_invested", "Company"], ascending=[False, True])
+    summary = summary.sort_values(["net_invested", "Company"], ascending=[False, True])
     return summary
 
 
@@ -328,6 +332,7 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
         invest_df.groupby("Year", dropna=False)
         .agg(
             gross_investment=("Gross Investment", "sum"),
+            fees_on_investments=("Fees", "sum"),
             current_value=("Current Value", "sum"),
             deal_count=("Company", "count"),
         )
@@ -342,27 +347,20 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
 
     yearly = pd.merge(invest_yearly, fee_yearly, on="Year", how="outer").sort_values("Year")
     yearly["gross_investment"] = yearly["gross_investment"].fillna(0.0)
+    yearly["fees_on_investments"] = yearly["fees_on_investments"].fillna(0.0)
+    yearly["fees_only"] = yearly["fees_only"].fillna(0.0)
     yearly["current_value"] = yearly["current_value"].fillna(0.0)
     yearly["deal_count"] = yearly["deal_count"].fillna(0).astype(int)
-    yearly["fees_only"] = yearly["fees_only"].fillna(0.0)
 
-    yearly["fees_on_investments"] = 0.0
-    if "Fees" in invest_df.columns and not invest_df.empty:
-        fees_on_inv = (
-            invest_df.groupby("Year", dropna=False)
-            .agg(fees_on_investments=("Fees", "sum"))
-            .reset_index()
-        )
-        yearly = pd.merge(yearly, fees_on_inv, on="Year", how="left", suffixes=("", "_y"))
-        yearly["fees_on_investments"] = yearly["fees_on_investments"].fillna(0.0)
+    yearly["fees"] = yearly["fees_on_investments"] + yearly["fees_only"]
+    yearly["net_invested"] = yearly["gross_investment"] - yearly["fees"]
+    yearly["gain_loss"] = yearly["current_value"] - yearly["net_invested"]
+    yearly["moic"] = yearly["current_value"] / yearly["gross_investment"].replace(0, pd.NA)
+    yearly["tvpi"] = yearly["current_value"] / yearly["net_invested"].replace(0, pd.NA)
 
-    yearly["fees"] = yearly["fees_only"] + yearly["fees_on_investments"]
-    yearly["total_invested"] = yearly["gross_investment"] + yearly["fees"]
-    yearly["gain_loss"] = yearly["current_value"] - yearly["total_invested"]
-    yearly["moic"] = yearly["current_value"] / yearly["total_invested"].replace(0, pd.NA)
-    yearly["tvpi"] = yearly["current_value"] / yearly["total_invested"].replace(0, pd.NA)
-
-    return yearly[["Year", "gross_investment", "fees", "total_invested", "current_value", "gain_loss", "deal_count", "moic", "tvpi"]]
+    return yearly[
+        ["Year", "gross_investment", "fees", "net_invested", "current_value", "gain_loss", "deal_count", "moic", "tvpi"]
+    ]
 
 
 def transaction_form(existing_row=None, form_key="transaction_form", is_new=False):
@@ -388,8 +386,10 @@ def transaction_form(existing_row=None, form_key="transaction_form", is_new=Fals
         with top1:
             date = st.date_input("Date", value=existing_date)
         with top2:
-            company_label = "Company / Organization" if existing_instrument == "Fee" else "Company"
-            company = st.text_input(company_label, value=existing_row.get("Company", "") or "")
+            company = st.text_input(
+                "Company / Organization" if existing_instrument == "Fee" else "Company",
+                value=existing_row.get("Company", "") or "",
+            )
         with top3:
             instrument_type = st.selectbox(
                 "Instrument Type",
@@ -426,20 +426,24 @@ def transaction_form(existing_row=None, form_key="transaction_form", is_new=Fals
         val1, val2 = st.columns(2)
         with val1:
             if is_new:
-                auto_current_value = gross_investment + fees
+                auto_current_value = 0.0 if instrument_type == "Fee" else gross_investment
                 current_value = money_input(
                     "Current Value ($)",
                     auto_current_value,
-                    help_text="For a new transaction this is set automatically to Gross Investment + Fees.",
+                    help_text="For a new transaction this is set automatically to Gross Investment. Fees are excluded from value.",
                     disabled=True,
                 )
             else:
-                current_value = money_input(
-                    "Current Value ($)",
-                    existing_row.get("Current Value", existing_row.get("Gross Investment", 0.0) + existing_row.get("Fees", 0.0)),
-                    disabled=(instrument_type == "Fee"),
-                    help_text="For fee records this stays at zero.",
-                )
+                default_current = existing_row.get("Current Value", 0.0)
+                if instrument_type == "Fee":
+                    current_value = money_input(
+                        "Current Value ($)",
+                        0.0,
+                        help_text="Fee records stay at zero value.",
+                        disabled=True,
+                    )
+                else:
+                    current_value = money_input("Current Value ($)", default_current)
         with val2:
             if not is_new:
                 status = st.selectbox(
@@ -457,10 +461,9 @@ def transaction_form(existing_row=None, form_key="transaction_form", is_new=Fals
         return None
 
     if is_new:
-        current_value = 0.0 if instrument_type == "Fee" else gross_investment + fees
-    else:
-        if instrument_type == "Fee":
-            current_value = 0.0
+        current_value = 0.0 if instrument_type == "Fee" else gross_investment
+    elif instrument_type == "Fee":
+        current_value = 0.0
 
     return {
         "Date": pd.to_datetime(date),
@@ -477,12 +480,12 @@ def transaction_form(existing_row=None, form_key="transaction_form", is_new=Fals
 
 
 def build_record_label(row) -> str:
-    date_str = pd.to_datetime(row["Date"], errors="coerce").strftime("%Y-%m-%d") if pd.notna(pd.to_datetime(row["Date"], errors="coerce")) else "No Date"
-    amount = format_currency_blank(row.get("Gross Investment", 0))
-    fees = format_currency_blank(row.get("Fees", 0))
+    date_val = pd.to_datetime(row["Date"], errors="coerce")
+    date_str = date_val.strftime("%Y-%m-%d") if pd.notna(date_val) else "No Date"
+    gross = format_currency_blank(row.get("Gross Investment", 0))
     instrument = row.get("Instrument Type", "")
     company = row.get("Company", "")
-    return f"{date_str} | {company} | {instrument} | Gross {amount} | Fees {fees}"
+    return f"{date_str} | {company} | {instrument} | {gross}"
 
 
 st.title("Angel Investment Tracker")
@@ -510,7 +513,9 @@ with st.sidebar:
         Use Instrument Type = Fee for organization fees such as Irish Angels.
         For SAFE or Convertible Note deals, use the cap as valuation when there is one.
         If there is no cap, leave valuation blank.
-        TVPI currently matches MOIC because realized proceeds are not tracked separately yet.
+        MOIC = Current Value / Gross Investment
+        TVPI = Current Value / Net Invested
+        Net Invested = Gross Investment - Fees
         """
     )
 
@@ -521,18 +526,43 @@ tab1, tab2, tab3, tab4 = st.tabs(
 with tab1:
     metrics = portfolio_metrics(df)
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Gross Invested", format_currency_blank(metrics["gross_investment"]))
-    c2.metric("Fees", format_currency_blank(metrics["fees"]))
-    c3.metric("Total Invested", format_currency_blank(metrics["total_invested"]))
-    c4.metric("Current Value", format_currency_blank(metrics["current_value"]))
+    r1c1, r1c2, r1c3, r1c4 = st.columns(4)
+    r1c1.metric("Gross Invested", format_currency_blank(metrics["gross_investment"]))
+    r1c2.metric("Fees", format_currency_blank(metrics["fees"]))
+    r1c3.metric("Net Invested", format_currency_blank(metrics["net_invested"]))
+    r1c4.metric("Current Value", format_currency_blank(metrics["current_value"]))
 
-    c5, c6, c7 = st.columns(3)
-    c5.metric("Gain / Loss", format_currency_blank(metrics["gain_loss"]))
-    c6.metric("MOIC", format_multiple(metrics["moic"]))
-    c7.metric("TVPI", format_multiple(metrics["tvpi"]))
+    r2c1, r2c2, r2c3, r2c4 = st.columns(4)
+    r2c1.metric("Gain / Loss", format_currency_blank(metrics["gain_loss"]))
+    r2c2.metric("MOIC", format_multiple(metrics["moic"]))
+    r2c3.metric("TVPI", format_multiple(metrics["tvpi"]))
+    r2c4.metric("Portfolio Companies", f'{metrics["positions"]:,}')
 
-    st.caption(f'Portfolio companies: {metrics["positions"]:,}')
+    st.subheader("Yearly Summary")
+    yearly = yearly_summary(df)
+    if not yearly.empty:
+        display_yearly = yearly.copy()
+        for col in ["gross_investment", "fees", "net_invested", "current_value", "gain_loss"]:
+            display_yearly[col] = display_yearly[col].map(format_currency)
+        display_yearly["moic"] = display_yearly["moic"].map(format_multiple)
+        display_yearly["tvpi"] = display_yearly["tvpi"].map(format_multiple)
+
+        display_yearly = display_yearly.rename(
+            columns={
+                "gross_investment": "Gross Invested",
+                "fees": "Fees",
+                "net_invested": "Net Invested",
+                "current_value": "Current Value",
+                "gain_loss": "Gain / Loss",
+                "deal_count": "Deals",
+                "moic": "MOIC",
+                "tvpi": "TVPI",
+            }
+        )
+
+        st.dataframe(display_yearly, use_container_width=True, hide_index=True)
+    else:
+        st.info("No yearly data yet.")
 
     st.subheader("Company Summary")
     comp = company_summary(df)
@@ -543,7 +573,7 @@ with tab1:
         for col in [
             "gross_investment",
             "fees",
-            "total_invested",
+            "net_invested",
             "current_value",
             "gain_loss",
             "latest_valuation_cap",
@@ -557,7 +587,7 @@ with tab1:
                 "deals": "Deals",
                 "gross_investment": "Gross Invested",
                 "fees": "Fees",
-                "total_invested": "Total Invested",
+                "net_invested": "Net Invested",
                 "current_value": "Current Value",
                 "gain_loss": "Gain / Loss",
                 "moic": "MOIC",
@@ -571,30 +601,6 @@ with tab1:
         )
 
         st.dataframe(display_comp, use_container_width=True, hide_index=True)
-
-    st.subheader("Yearly Summary")
-    yearly = yearly_summary(df)
-    if not yearly.empty:
-        display_yearly = yearly.copy()
-        for col in ["gross_investment", "fees", "total_invested", "current_value", "gain_loss"]:
-            display_yearly[col] = display_yearly[col].map(format_currency)
-        display_yearly["moic"] = display_yearly["moic"].map(format_multiple)
-        display_yearly["tvpi"] = display_yearly["tvpi"].map(format_multiple)
-
-        display_yearly = display_yearly.rename(
-            columns={
-                "gross_investment": "Gross Invested",
-                "fees": "Fees",
-                "total_invested": "Total Invested",
-                "current_value": "Current Value",
-                "gain_loss": "Gain / Loss",
-                "deal_count": "Deals",
-                "moic": "MOIC",
-                "tvpi": "TVPI",
-            }
-        )
-
-        st.dataframe(display_yearly, use_container_width=True, hide_index=True)
 
 with tab2:
     st.subheader("Add New Investment")
@@ -618,17 +624,20 @@ with tab3:
     if df.empty:
         st.info("No transactions available to edit.")
     else:
-        filter1, filter2 = st.columns(2)
-        with filter1:
+        f1, f2, f3 = st.columns(3)
+        with f1:
             company_options = ["All"] + sorted([c for c in df["Company"].dropna().unique().tolist() if c != ""])
-            company_filter = st.selectbox("Filter by Company / Organization", company_options)
-        with filter2:
-            status_options = ["All"] + STATUS_OPTIONS
-            status_filter = st.selectbox("Filter by Status", status_options)
+            company_filter = st.selectbox("Company / Organization", company_options)
+        with f2:
+            instrument_filter = st.selectbox("Instrument Type", ["All"] + INSTRUMENT_OPTIONS)
+        with f3:
+            status_filter = st.selectbox("Status", ["All"] + STATUS_OPTIONS)
 
         filtered = df.copy()
         if company_filter != "All":
             filtered = filtered[filtered["Company"] == company_filter]
+        if instrument_filter != "All":
+            filtered = filtered[filtered["Instrument Type"] == instrument_filter]
         if status_filter != "All":
             filtered = filtered[filtered["Status"] == status_filter]
 
@@ -638,17 +647,18 @@ with tab3:
             filtered = filtered.copy().reset_index()
             filtered["label"] = filtered.apply(build_record_label, axis=1)
 
+            st.caption(f"{len(filtered)} transaction(s) match your filters")
+
             selected_label = st.selectbox("Select Transaction", filtered["label"].tolist())
             selected_row_index = filtered.loc[filtered["label"] == selected_label, "index"].iloc[0]
             selected_row = df.loc[selected_row_index].to_dict()
 
-            preview = pd.DataFrame([selected_row]).copy()
-            preview["Date"] = pd.to_datetime(preview["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
-            preview["Gross Investment"] = preview["Gross Investment"].map(format_currency_blank)
-            preview["Fees"] = preview["Fees"].map(format_currency_blank)
-            preview["Current Value"] = preview["Current Value"].map(format_currency_blank)
-            preview["Valuation/Cap at Investment"] = preview["Valuation/Cap at Investment"].map(format_currency)
-            st.dataframe(preview, use_container_width=True, hide_index=True)
+            meta1, meta2, meta3 = st.columns(3)
+            meta1.info(f"Company: {selected_row.get('Company', '') or 'N/A'}")
+            meta2.info(f"Instrument: {selected_row.get('Instrument Type', '') or 'N/A'}")
+            meta3.info(
+                f"Date: {pd.to_datetime(selected_row.get('Date'), errors='coerce').strftime('%Y-%m-%d') if pd.notna(pd.to_datetime(selected_row.get('Date'), errors='coerce')) else 'N/A'}"
+            )
 
             edited_row = transaction_form(
                 existing_row=selected_row,
@@ -656,25 +666,23 @@ with tab3:
                 is_new=False,
             )
 
-            c1, c2 = st.columns(2)
-            with c1:
-                if edited_row is not None:
-                    if not edited_row["Company"]:
-                        st.error("Company or organization is required.")
-                    else:
-                        updated = df.copy()
-                        for key, value in edited_row.items():
-                            updated.at[selected_row_index, key] = value
-                        updated = normalize_dataframe(updated)
-                        updated = updated.sort_values(["Date", "Company"], na_position="last").reset_index(drop=True)
-                        st.session_state.df = updated
-                        st.toast("Transaction updated")
-                        st.success("Transaction updated. Download your CSV to keep it.")
-                        st.rerun()
+            if edited_row is not None:
+                if not edited_row["Company"]:
+                    st.error("Company or organization is required.")
+                else:
+                    updated = df.copy()
+                    for key, value in edited_row.items():
+                        updated.at[selected_row_index, key] = value
+                    updated = normalize_dataframe(updated)
+                    updated = updated.sort_values(["Date", "Company"], na_position="last").reset_index(drop=True)
+                    st.session_state.df = updated
+                    st.toast("Transaction updated")
+                    st.success("Transaction updated. Download your CSV to keep it.")
+                    st.rerun()
 
-            with c2:
-                st.markdown("Delete Transaction")
-                confirm_delete = st.checkbox("Confirm delete for this selected transaction")
+            with st.expander("Delete this transaction"):
+                st.write("This permanently removes the selected transaction from the current session.")
+                confirm_delete = st.checkbox("I want to delete this transaction")
                 if st.button("Delete Selected Transaction", type="secondary", disabled=not confirm_delete):
                     updated = df.drop(index=selected_row_index).reset_index(drop=True)
                     updated = normalize_dataframe(updated) if not updated.empty else empty_df()
