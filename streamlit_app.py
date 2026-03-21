@@ -271,15 +271,11 @@ def portfolio_metrics(df: pd.DataFrame, metric_view: str = "Total") -> dict:
         return {
             "gross_investment": 0.0,
             "fees": 0.0,
-            "total_paid": 0.0,
             "current_value": 0.0,
             "distributions": 0.0,
             "display_value": 0.0,
-            "total_value": 0.0,
             "gain_loss": 0.0,
             "positions": 0,
-            "transactions": 0,
-            "investment_transactions": 0,
             "moic": pd.NA,
             "tvpi": pd.NA,
         }
@@ -295,23 +291,17 @@ def portfolio_metrics(df: pd.DataFrame, metric_view: str = "Total") -> dict:
     display_value = value_basis_series(invest_df, metric_view).sum()
     gain_loss = total_value - total_paid
     positions = invest_df["Company"].replace("", pd.NA).dropna().nunique()
-    transactions = len(df)
-    investment_transactions = len(invest_df)
     moic = display_value / gross_investment if gross_investment != 0 else pd.NA
     tvpi = display_value / total_paid if total_paid != 0 else pd.NA
 
     return {
         "gross_investment": gross_investment,
         "fees": fees,
-        "total_paid": total_paid,
         "current_value": current_value,
         "distributions": distributions,
         "display_value": display_value,
-        "total_value": total_value,
         "gain_loss": gain_loss,
         "positions": positions,
-        "transactions": transactions,
-        "investment_transactions": investment_transactions,
         "moic": moic,
         "tvpi": tvpi,
     }
@@ -687,20 +677,14 @@ with tab1:
     r1c1, r1c2, r1c3, r1c4 = st.columns(4)
     r1c1.metric("Gross Investment", format_currency_blank(metrics["gross_investment"]))
     r1c2.metric("Fees", format_currency_blank(metrics["fees"]))
-    r1c3.metric("Total Paid", format_currency_blank(metrics["total_paid"]))
-    r1c4.metric(display_value_label, format_currency_blank(metrics["display_value"]))
+    r1c3.metric(display_value_label, format_currency_blank(metrics["display_value"]))
+    r1c4.metric("Total Gain / Loss", format_currency_blank(metrics["gain_loss"]))
 
     r2c1, r2c2, r2c3, r2c4 = st.columns(4)
     r2c1.metric("Current Value", format_currency_blank(metrics["current_value"]))
     r2c2.metric("Distributions", format_currency_blank(metrics["distributions"]))
     r2c3.metric("MOIC", format_multiple(metrics["moic"]))
     r2c4.metric("TVPI", format_multiple(metrics["tvpi"]))
-
-    r3c1, r3c2, r3c3, r3c4 = st.columns(4)
-    r3c1.metric("Total Gain / Loss", format_currency_blank(metrics["gain_loss"]))
-    r3c2.metric("Portfolio Companies", f'{metrics["positions"]:,}')
-    r3c3.metric("Investment Transactions", f'{metrics["investment_transactions"]:,}')
-    r3c4.metric("All Transactions", f'{metrics["transactions"]:,}')
 
     st.subheader("Yearly Summary")
     yearly = yearly_summary(df)
