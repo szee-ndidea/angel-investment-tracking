@@ -401,7 +401,11 @@ def transaction_form(existing_row=None, form_key="transaction_form", is_new=Fals
         with mid1:
             gross_investment = money_input("Gross Investment ($)", existing_row.get("Gross Investment", 0.0))
         with mid2:
-            fees = money_input("Fees ($)", existing_row.get("Fees", 0.0), help_text="You can type commas, for example 1,250")
+            fees = money_input(
+                "Fees ($)",
+                existing_row.get("Fees", 0.0),
+                help_text="You can type commas, for example 1,250",
+            )
         with mid3:
             round_stage = st.text_input("Round / Stage", value=existing_row.get("Round/Stage", "") or "")
 
@@ -483,9 +487,10 @@ def build_record_label(row) -> str:
     date_val = pd.to_datetime(row["Date"], errors="coerce")
     date_str = date_val.strftime("%Y-%m-%d") if pd.notna(date_val) else "No Date"
     gross = format_currency_blank(row.get("Gross Investment", 0))
+    fees = format_currency_blank(row.get("Fees", 0))
     instrument = row.get("Instrument Type", "")
     company = row.get("Company", "")
-    return f"{date_str} | {company} | {instrument} | {gross}"
+    return f"{date_str} | {company} | {instrument} | Gross {gross} | Fees {fees}"
 
 
 st.title("Angel Investment Tracker")
@@ -538,6 +543,8 @@ with tab1:
     r2c2.metric("MOIC", format_multiple(metrics["moic"]))
     r2c3.metric("TVPI", format_multiple(metrics["tvpi"]))
     r2c4.metric("Portfolio Companies", f'{metrics["positions"]:,}')
+
+    st.caption("MOIC and TVPI are currently shown on Gross Investment only. Fees are tracked separately in Total Paid.")
 
     st.subheader("Yearly Summary")
     yearly = yearly_summary(df)
@@ -625,6 +632,8 @@ with tab3:
     if df.empty:
         st.info("No transactions available to edit.")
     else:
+        st.caption("Filter first, then choose one transaction to edit.")
+
         f1, f2, f3 = st.columns(3)
         with f1:
             company_options = ["All"] + sorted([c for c in df["Company"].dropna().unique().tolist() if c != ""])
@@ -648,19 +657,39 @@ with tab3:
             filtered = filtered.copy().reset_index()
             filtered["label"] = filtered.apply(build_record_label, axis=1)
 
-            st.caption(f"{len(filtered)} transaction(s) match your filters")
+            c1, c2 = st.columns([1, 1])
+            with c1:
+                st.metric("Matching Transactions", f"{len(filtered):,}")
+            with c2:
+                st.metric("Total Transactions", f"{len(df):,}")
 
-            selected_label = st.selectbox("Select Transaction", filtered["label"].tolist())
+            selected_label = st.selectbox(
+                "Transaction to Edit",
+                filtered["label"].tolist(),
+                label_visibility="visible",
+            )
             selected_row_index = filtered.loc[filtered["label"] == selected_label, "index"].iloc[0]
             selected_row = df.loc[selected_row_index].to_dict()
 
-            summary_line = (
-                f"Selected: {selected_row.get('Company', '') or 'N/A'}"
-                f" | {selected_row.get('Instrument Type', '') or 'N/A'}"
-                f" | {pd.to_datetime(selected_row.get('Date'), errors='coerce').strftime('%Y-%m-%d') if pd.notna(pd.to_datetime(selected_row.get('Date'), errors='coerce')) else 'N/A'}"
-                f" | Gross {format_currency_blank(selected_row.get('Gross Investment', 0))}"
-            )
-            st.info(summary_line)
+            selected_date = pd.to_datetime(selected_row.get("Date"), errors="coerce")
+            selected_date_str = selected_date.strftime("%Y-%m-%d") if pd.notna(selected_date) else "N/A"
+            selected_total_paid = parse_money(selected_row.get("Gross Investment", 0)) + parse_money(selected_row.get("Fees", 0))
+
+            st.markdown("#### Selected Transaction")
+            s1, s2, s3, s4 = st.columns(4)
+            s1.metric("Date", selected_date_str)
+            s2.metric("Company / Org", selected_row.get("Company", "") or "N/A")
+            s3.metric("Instrument", selected_row.get("Instrument Type", "") or "N/A")
+            s4.metric("Status", selected_row.get("Status", "") or "N/A")
+
+            s5, s6, s7, s8 = st.columns(4)
+            s5.metric("Gross Investment", format_currency_blank(selected_row.get("Gross Investment", 0)) or "$0")
+            s6.metric("Fees", format_currency_blank(selected_row.get("Fees", 0)) or "$0")
+            s7.metric("Current Value", format_currency_blank(selected_row.get("Current Value", 0)) or "$0")
+            s8.metric("Total Paid", format_currency_blank(selected_total_paid) or "$0")
+
+            st.divider()
+            st.markdown("#### Edit Transaction")
 
             edited_row = transaction_form(
                 existing_row=selected_row,
@@ -682,9 +711,11 @@ with tab3:
                     st.success("Transaction updated. Download your CSV to keep it.")
                     st.rerun()
 
-            with st.expander("Delete this transaction"):
-                st.write("This permanently removes the selected transaction from the current session.")
-                confirm_delete = st.checkbox("I want to delete this transaction")
+            st.divider()
+
+            with st.expander("Delete Transaction"):
+                st.write("This removes the selected transaction from the current session.")
+                confirm_delete = st.checkbox("I understand and want to delete this transaction")
                 if st.button("Delete Selected Transaction", type="secondary", disabled=not confirm_delete):
                     updated = df.drop(index=selected_row_index).reset_index(drop=True)
                     updated = normalize_dataframe(updated) if not updated.empty else empty_df()
