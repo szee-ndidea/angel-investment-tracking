@@ -13,6 +13,7 @@ EXPECTED_COLUMNS = [
     "Gross Investment",
     "Fees",
     "Current Value",
+    "Distributions",
     "Status",
     "Valuation/Cap at Investment",
     "Source of Deal",
@@ -38,6 +39,8 @@ INSTRUMENT_OPTIONS = [
     "Fee",
     "Other",
 ]
+
+METRIC_VIEW_OPTIONS = ["Total", "Realized", "Unrealized"]
 
 
 def empty_df() -> pd.DataFrame:
@@ -155,6 +158,10 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         "fees": "Fees",
         "current value": "Current Value",
         "value": "Current Value",
+        "distributions": "Distributions",
+        "distribution": "Distributions",
+        "realized distributions": "Distributions",
+        "cash distributions": "Distributions",
         "status": "Status",
         "company value at investment": "Valuation/Cap at Investment",
         "valuation at investment": "Valuation/Cap at Investment",
@@ -182,7 +189,7 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
 
-    for col in ["Gross Investment", "Fees", "Current Value"]:
+    for col in ["Gross Investment", "Fees", "Current Value", "Distributions"]:
         df[col] = df[col].apply(parse_money)
 
     df["Valuation/Cap at Investment"] = df["Valuation/Cap at Investment"].apply(parse_nullable_money)
@@ -195,8 +202,8 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     fee_mask = df["Instrument Type"].eq("Fee")
     df.loc[fee_mask, "Gross Investment"] = 0.0
     df.loc[fee_mask, "Current Value"] = 0.0
+    df.loc[fee_mask, "Distributions"] = 0.0
     df.loc[fee_mask, "Valuation/Cap at Investment"] = pd.NA
-    df.loc[fee_mask & df["Status"].eq(""), "Status"] = "Active"
 
     df = df.dropna(how="all")
     return df
@@ -239,25 +246,36 @@ def fee_only_df(df: pd.DataFrame) -> pd.DataFrame:
     return df[df["Instrument Type"].fillna("") == "Fee"].copy()
 
 
+def value_basis_series(df: pd.DataFrame, metric_view: str) -> pd.Series:
+    if metric_view == "Realized":
+        return df["Distributions"].fillna(0.0)
+    if metric_view == "Unrealized":
+        return df["Current Value"].fillna(0.0)
+    return df["Current Value"].fillna(0.0) + df["Distributions"].fillna(0.0)
+
+
 def add_calculated_fields(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df.copy()
 
     out = df.copy()
     out["Total Paid"] = out["Gross Investment"] + out["Fees"]
-    out["Gain / Loss"] = out["Current Value"] - out["Total Paid"]
-    out["MOIC"] = out["Current Value"] / out["Gross Investment"].replace(0, pd.NA)
-    out["TVPI"] = out["Current Value"] / out["Total Paid"].replace(0, pd.NA)
+    out["Total Value"] = out["Current Value"] + out["Distributions"]
+    out["Gain / Loss"] = out["Total Value"] - out["Total Paid"]
+    out["MOIC"] = out["Total Value"] / out["Gross Investment"].replace(0, pd.NA)
+    out["TVPI"] = out["Total Value"] / out["Total Paid"].replace(0, pd.NA)
     return out
 
 
-def portfolio_metrics(df: pd.DataFrame) -> dict:
+def portfolio_metrics(df: pd.DataFrame, metric_view: str = "Total") -> dict:
     if df.empty:
         return {
             "gross_investment": 0.0,
             "fees": 0.0,
             "total_paid": 0.0,
             "current_value": 0.0,
+            "distributions": 0.0,
+            "display_value": 0.0,
             "gain_loss": 0.0,
             "positions": 0,
             "transactions": 0,
@@ -274,19 +292,23 @@ def portfolio_metrics(df: pd.DataFrame) -> dict:
     fees = df["Fees"].fillna(0).sum()
     total_paid = gross_investment + fees
     current_value = invest_df["Current Value"].fillna(0).sum()
-    gain_loss = current_value - total_paid
+    distributions = invest_df["Distributions"].fillna(0).sum()
+    display_value = value_basis_series(invest_df, metric_view).sum()
+    gain_loss = (current_value + distributions) - total_paid
     positions = invest_df["Company"].replace("", pd.NA).dropna().nunique()
     transactions = len(df)
     investment_transactions = len(invest_df)
     fee_records = len(fee_df)
-    moic = current_value / gross_investment if gross_investment != 0 else pd.NA
-    tvpi = current_value / total_paid if total_paid != 0 else pd.NA
+    moic = display_value / gross_investment if gross_investment != 0 else pd.NA
+    tvpi = display_value / total_paid if total_paid != 0 else pd.NA
 
     return {
         "gross_investment": gross_investment,
         "fees": fees,
         "total_paid": total_paid,
         "current_value": current_value,
+        "distributions": distributions,
+        "display_value": display_value,
         "gain_loss": gain_loss,
         "positions": positions,
         "transactions": transactions,
@@ -313,6 +335,7 @@ def company_summary(df: pd.DataFrame) -> pd.DataFrame:
             gross_investment=("Gross Investment", "sum"),
             fees=("Fees", "sum"),
             current_value=("Current Value", "sum"),
+            distributions=("Distributions", "sum"),
             latest_status=("Status", "last"),
             latest_instrument=("Instrument Type", "last"),
             latest_round=("Round/Stage", "last"),
@@ -323,9 +346,10 @@ def company_summary(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     summary["total_paid"] = summary["gross_investment"] + summary["fees"]
-    summary["gain_loss"] = summary["current_value"] - summary["total_paid"]
-    summary["moic"] = summary["current_value"] / summary["gross_investment"].replace(0, pd.NA)
-    summary["tvpi"] = summary["current_value"] / summary["total_paid"].replace(0, pd.NA)
+    summary["total_value"] = summary["current_value"] + summary["distributions"]
+    summary["gain_loss"] = summary["total_value"] - summary["total_paid"]
+    summary["moic"] = summary["total_value"] / summary["gross_investment"].replace(0, pd.NA)
+    summary["tvpi"] = summary["total_value"] / summary["total_paid"].replace(0, pd.NA)
 
     summary = summary.sort_values(["gross_investment", "Company"], ascending=[False, True])
     return summary
@@ -346,8 +370,6 @@ def org_fee_summary(df: pd.DataFrame) -> pd.DataFrame:
             fee_records=("Company", "count"),
             total_fees=("Fees", "sum"),
             latest_date=("Date_Sort", "last"),
-            latest_status=("Status", "last"),
-            latest_source_of_deal=("Source of Deal", "last"),
         )
         .reset_index()
     )
@@ -372,6 +394,7 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
             gross_investment=("Gross Investment", "sum"),
             fees_on_investments=("Fees", "sum"),
             current_value=("Current Value", "sum"),
+            distributions=("Distributions", "sum"),
             deal_count=("Company", "count"),
         )
         .reset_index()
@@ -391,14 +414,16 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
     yearly["fees_on_investments"] = yearly["fees_on_investments"].fillna(0.0)
     yearly["fees_only"] = yearly["fees_only"].fillna(0.0)
     yearly["current_value"] = yearly["current_value"].fillna(0.0)
+    yearly["distributions"] = yearly["distributions"].fillna(0.0)
     yearly["deal_count"] = yearly["deal_count"].fillna(0).astype(int)
     yearly["fee_record_count"] = yearly["fee_record_count"].fillna(0).astype(int)
 
     yearly["fees"] = yearly["fees_on_investments"] + yearly["fees_only"]
     yearly["total_paid"] = yearly["gross_investment"] + yearly["fees"]
-    yearly["gain_loss"] = yearly["current_value"] - yearly["total_paid"]
-    yearly["moic"] = yearly["current_value"] / yearly["gross_investment"].replace(0, pd.NA)
-    yearly["tvpi"] = yearly["current_value"] / yearly["total_paid"].replace(0, pd.NA)
+    yearly["total_value"] = yearly["current_value"] + yearly["distributions"]
+    yearly["gain_loss"] = yearly["total_value"] - yearly["total_paid"]
+    yearly["moic"] = yearly["total_value"] / yearly["gross_investment"].replace(0, pd.NA)
+    yearly["tvpi"] = yearly["total_value"] / yearly["total_paid"].replace(0, pd.NA)
 
     return yearly[
         [
@@ -407,6 +432,8 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
             "fees",
             "total_paid",
             "current_value",
+            "distributions",
+            "total_value",
             "gain_loss",
             "deal_count",
             "fee_record_count",
@@ -441,10 +468,11 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
         with top2:
             company = st.text_input("Company", value=existing_row.get("Company", "") or "")
         with top3:
+            investment_instruments = [x for x in INSTRUMENT_OPTIONS if x != "Fee"]
             instrument_type = st.selectbox(
                 "Instrument Type",
-                options=[x for x in INSTRUMENT_OPTIONS if x != "Fee"],
-                index=[x for x in INSTRUMENT_OPTIONS if x != "Fee"].index(existing_instrument),
+                options=investment_instruments,
+                index=investment_instruments.index(existing_instrument),
             )
 
         mid1, mid2, mid3 = st.columns(3)
@@ -480,7 +508,7 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
         with bot2:
             source_of_deal = st.text_input("Source of Deal", value=existing_row.get("Source of Deal", "") or "")
 
-        val1, val2 = st.columns(2)
+        val1, val2, val3 = st.columns(3)
         with val1:
             if is_new:
                 current_value = money_input(
@@ -494,9 +522,17 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
                 current_value = money_input(
                     "Current Value ($)",
                     existing_row.get("Current Value", 0.0),
+                    help_text="Use this for unrealized residual value still held.",
                     key=f"{form_key}_current_value_edit",
                 )
         with val2:
+            distributions = money_input(
+                "Distributions ($)",
+                existing_row.get("Distributions", 0.0),
+                help_text="Cash returned from the company, for example on a partial or full exit.",
+                key=f"{form_key}_distributions",
+            )
+        with val3:
             if not is_new:
                 status = st.selectbox(
                     "Status",
@@ -523,6 +559,7 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
         "Gross Investment": gross_investment,
         "Fees": fees,
         "Current Value": current_value,
+        "Distributions": distributions,
         "Status": status,
         "Valuation/Cap at Investment": valuation_cap,
         "Source of Deal": source_of_deal.strip(),
@@ -539,10 +576,6 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False):
     elif hasattr(existing_date, "date"):
         existing_date = existing_date.date()
 
-    existing_status = existing_row.get("Status", "Active")
-    if existing_status not in STATUS_OPTIONS:
-        existing_status = "Other"
-
     with st.form(form_key, clear_on_submit=False):
         top1, top2, top3 = st.columns(3)
         with top1:
@@ -550,48 +583,12 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False):
         with top2:
             organization = st.text_input("Organization", value=existing_row.get("Company", "") or "")
         with top3:
-            st.text_input("Instrument Type", value="Fee", disabled=True)
-
-        mid1, mid2, mid3 = st.columns(3)
-        with mid1:
             fee_amount = money_input(
-                "Fees ($)",
+                "Fee Amount ($)",
                 existing_row.get("Fees", 0.0),
-                help_text="Use this for organization fees such as Irish Angels. You can type commas, for example 1,250",
+                help_text="Use this for organization fees such as Irish Angels.",
                 key=f"{form_key}_fee_amount",
             )
-        with mid2:
-            fee_type = st.text_input("Fee Type / Description", value=existing_row.get("Round/Stage", "") or "")
-        with mid3:
-            source_of_deal = st.text_input("Source of Deal", value=existing_row.get("Source of Deal", "") or "")
-
-        bot1, bot2 = st.columns(2)
-        with bot1:
-            gross_investment = money_input(
-                "Gross Investment ($)",
-                0.0,
-                help_text="Fee records do not have invested capital.",
-                disabled=True,
-                key=f"{form_key}_gross_disabled",
-            )
-        with bot2:
-            current_value = money_input(
-                "Current Value ($)",
-                0.0,
-                help_text="Fee records stay at zero value.",
-                disabled=True,
-                key=f"{form_key}_current_disabled",
-            )
-
-        if not is_new:
-            status = st.selectbox(
-                "Status",
-                options=STATUS_OPTIONS,
-                index=STATUS_OPTIONS.index(existing_status),
-            )
-        else:
-            status = "Active"
-            st.text_input("Status", value="Active", disabled=True)
 
         submitted = st.form_submit_button("Add Fee Record" if is_new else "Save Fee Changes")
 
@@ -602,13 +599,14 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False):
         "Date": pd.to_datetime(date),
         "Company": organization.strip(),
         "Instrument Type": "Fee",
-        "Round/Stage": fee_type.strip(),
+        "Round/Stage": "",
         "Gross Investment": 0.0,
         "Fees": fee_amount,
         "Current Value": 0.0,
-        "Status": status,
+        "Distributions": 0.0,
+        "Status": "Active",
         "Valuation/Cap at Investment": pd.NA,
-        "Source of Deal": source_of_deal.strip(),
+        "Source of Deal": "",
     }
 
 
@@ -620,18 +618,20 @@ def build_record_label(row) -> str:
 
     if instrument == "Fee":
         fees = format_currency_blank(row.get("Fees", 0))
-        fee_type = row.get("Round/Stage", "")
-        return f"{date_str} | {company} | Fee | {fee_type} | Fees {fees}"
+        return f"{date_str} | {company} | Fee | {fees}"
 
     gross = format_currency_blank(row.get("Gross Investment", 0))
-    fees = format_currency_blank(row.get("Fees", 0))
-    return f"{date_str} | {company} | {instrument} | Gross {gross} | Fees {fees}"
+    distributions = format_currency_blank(row.get("Distributions", 0))
+    return f"{date_str} | {company} | {instrument} | Gross {gross} | Dist {distributions}"
 
 
 st.title("Angel Investment Tracker")
 
 if "df" not in st.session_state:
     st.session_state.df = empty_df()
+
+if "overview_metric_view" not in st.session_state:
+    st.session_state.overview_metric_view = "Total"
 
 df = normalize_dataframe(st.session_state.df) if not st.session_state.df.empty else empty_df()
 st.session_state.df = df
@@ -655,9 +655,11 @@ with st.sidebar:
         Organization fees are stored in the same CSV, but handled separately in the UI.
         Gross Investment is your actual investment into the company.
         Fees are separate deal costs.
-        Current Value excludes fees.
-        MOIC = Current Value / Gross Investment
-        TVPI = Current Value / (Gross Investment + Fees)
+        Current Value is unrealized residual value.
+        Distributions are realized cash back from the company.
+        Total Value = Current Value + Distributions
+        MOIC = selected value basis / Gross Investment
+        TVPI = selected value basis / (Gross Investment + Fees)
         For SAFE or Convertible Note deals, use the cap as valuation when there is one.
         If there is no cap, leave valuation blank.
         """
@@ -668,29 +670,62 @@ tab1, tab2, tab3, tab4 = st.tabs(
 )
 
 with tab1:
-    metrics = portfolio_metrics(df)
+    metric_view = st.segmented_control(
+        "Metric View",
+        options=METRIC_VIEW_OPTIONS,
+        selection_mode="single",
+        default=st.session_state.overview_metric_view,
+    )
+    if metric_view is None:
+        metric_view = st.session_state.overview_metric_view
+    st.session_state.overview_metric_view = metric_view
+
+    metrics = portfolio_metrics(df, metric_view=metric_view)
+
+    view_label_map = {
+        "Total": "Total Value",
+        "Realized": "Realized Value",
+        "Unrealized": "Unrealized Value",
+    }
+    display_value_label = view_label_map.get(metric_view, "Value")
 
     r1c1, r1c2, r1c3, r1c4 = st.columns(4)
     r1c1.metric("Gross Investment", format_currency_blank(metrics["gross_investment"]))
     r1c2.metric("Fees", format_currency_blank(metrics["fees"]))
     r1c3.metric("Total Paid", format_currency_blank(metrics["total_paid"]))
-    r1c4.metric("Current Value", format_currency_blank(metrics["current_value"]))
+    r1c4.metric(display_value_label, format_currency_blank(metrics["display_value"]))
 
     r2c1, r2c2, r2c3, r2c4 = st.columns(4)
-    r2c1.metric("Gain / Loss", format_currency_blank(metrics["gain_loss"]))
-    r2c2.metric("MOIC", format_multiple(metrics["moic"]))
-    r2c3.metric("TVPI", format_multiple(metrics["tvpi"]))
-    r2c4.metric("Portfolio Companies", f'{metrics["positions"]:,}')
+    r2c1.metric("MOIC", format_multiple(metrics["moic"]))
+    r2c2.metric("TVPI", format_multiple(metrics["tvpi"]))
+    r2c3.metric("Portfolio Companies", f'{metrics["positions"]:,}')
+    r2c4.metric("Transactions", f'{metrics["transactions"]:,}')
+
+    r3c1, r3c2, r3c3, r3c4 = st.columns(4)
+    r3c1.metric("Unrealized Value", format_currency_blank(metrics["current_value"]))
+    r3c2.metric("Distributions", format_currency_blank(metrics["distributions"]))
+    r3c3.metric("Total Gain / Loss", format_currency_blank(metrics["gain_loss"]))
+    r3c4.metric("Fee Records", f'{metrics["fee_records"]:,}')
 
     st.caption(
-        "Current Value excludes fees. MOIC = Current Value / Gross Investment. TVPI = Current Value / (Gross Investment + Fees)."
+        f"{metric_view} view is active. "
+        "MOIC uses Gross Investment as the denominator. "
+        "TVPI uses Gross Investment + Fees as the denominator."
     )
 
     st.subheader("Yearly Summary")
     yearly = yearly_summary(df)
     if not yearly.empty:
         display_yearly = yearly.copy()
-        for col in ["gross_investment", "fees", "total_paid", "current_value", "gain_loss"]:
+        for col in [
+            "gross_investment",
+            "fees",
+            "total_paid",
+            "current_value",
+            "distributions",
+            "total_value",
+            "gain_loss",
+        ]:
             display_yearly[col] = display_yearly[col].map(format_currency)
         display_yearly["moic"] = display_yearly["moic"].map(format_multiple)
         display_yearly["tvpi"] = display_yearly["tvpi"].map(format_multiple)
@@ -701,6 +736,8 @@ with tab1:
                 "fees": "Fees",
                 "total_paid": "Total Paid",
                 "current_value": "Current Value",
+                "distributions": "Distributions",
+                "total_value": "Total Value",
                 "gain_loss": "Gain / Loss",
                 "deal_count": "Investment Deals",
                 "fee_record_count": "Fee Records",
@@ -724,6 +761,8 @@ with tab1:
             "fees",
             "total_paid",
             "current_value",
+            "distributions",
+            "total_value",
             "gain_loss",
             "latest_valuation_cap",
         ]:
@@ -738,6 +777,8 @@ with tab1:
                 "fees": "Fees",
                 "total_paid": "Total Paid",
                 "current_value": "Current Value",
+                "distributions": "Distributions",
+                "total_value": "Total Value",
                 "gain_loss": "Gain / Loss",
                 "moic": "MOIC",
                 "tvpi": "TVPI",
@@ -768,8 +809,6 @@ with tab1:
                 "fee_records": "Fee Records",
                 "total_fees": "Total Fees",
                 "latest_date": "Latest Date",
-                "latest_status": "Status",
-                "latest_source_of_deal": "Source of Deal",
             }
         )
 
@@ -870,6 +909,9 @@ with tab3:
                 selected_total_paid = parse_money(selected_row.get("Gross Investment", 0)) + parse_money(
                     selected_row.get("Fees", 0)
                 )
+                selected_total_value = parse_money(selected_row.get("Current Value", 0)) + parse_money(
+                    selected_row.get("Distributions", 0)
+                )
 
                 st.markdown("#### Selected Investment")
                 s1, s2, s3, s4 = st.columns(4)
@@ -878,11 +920,14 @@ with tab3:
                 s3.metric("Instrument", selected_row.get("Instrument Type", "") or "N/A")
                 s4.metric("Status", selected_row.get("Status", "") or "N/A")
 
-                s5, s6, s7, s8 = st.columns(4)
+                s5, s6, s7, s8, s9 = st.columns(5)
                 s5.metric("Gross Investment", format_currency_blank(selected_row.get("Gross Investment", 0)) or "$0")
                 s6.metric("Fees", format_currency_blank(selected_row.get("Fees", 0)) or "$0")
                 s7.metric("Current Value", format_currency_blank(selected_row.get("Current Value", 0)) or "$0")
-                s8.metric("Total Paid", format_currency_blank(selected_total_paid) or "$0")
+                s8.metric("Distributions", format_currency_blank(selected_row.get("Distributions", 0)) or "$0")
+                s9.metric("Total Value", format_currency_blank(selected_total_value) or "$0")
+
+                st.caption(f"Total Paid: {format_currency_blank(selected_total_paid) or '$0'}")
 
                 st.divider()
                 st.markdown("#### Edit Investment")
@@ -936,25 +981,25 @@ with tab3:
         else:
             st.caption("Filter first, then choose one fee record to edit.")
 
-            f1, f2, f3 = st.columns(3)
+            f1, f2 = st.columns(2)
             with f1:
                 org_options = ["All"] + sorted([c for c in fee_df["Company"].dropna().unique().tolist() if c != ""])
                 org_filter = st.selectbox("Organization", org_options, key="fee_org_filter")
             with f2:
-                fee_type_options = ["All"] + sorted(
-                    [c for c in fee_df["Round/Stage"].dropna().unique().tolist() if c != ""]
+                date_filter = st.selectbox(
+                    "Date",
+                    ["All"] + sorted(
+                        pd.to_datetime(fee_df["Date"], errors="coerce").dt.strftime("%Y-%m-%d").dropna().unique().tolist()
+                    ),
+                    key="fee_date_filter",
                 )
-                fee_type_filter = st.selectbox("Fee Type / Description", fee_type_options, key="fee_type_filter")
-            with f3:
-                status_filter = st.selectbox("Status", ["All"] + STATUS_OPTIONS, key="fee_status_filter")
 
             filtered = fee_df.copy()
             if org_filter != "All":
                 filtered = filtered[filtered["Company"] == org_filter]
-            if fee_type_filter != "All":
-                filtered = filtered[filtered["Round/Stage"] == fee_type_filter]
-            if status_filter != "All":
-                filtered = filtered[filtered["Status"] == status_filter]
+            if date_filter != "All":
+                filtered_dates = pd.to_datetime(filtered["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
+                filtered = filtered[filtered_dates == date_filter]
 
             if filtered.empty:
                 st.info("No fee records match your filters.")
@@ -980,16 +1025,10 @@ with tab3:
                 selected_date_str = selected_date.strftime("%Y-%m-%d") if pd.notna(selected_date) else "N/A"
 
                 st.markdown("#### Selected Fee Record")
-                s1, s2, s3, s4 = st.columns(4)
+                s1, s2, s3 = st.columns(3)
                 s1.metric("Date", selected_date_str)
                 s2.metric("Organization", selected_row.get("Company", "") or "N/A")
-                s3.metric("Fee Type", selected_row.get("Round/Stage", "") or "N/A")
-                s4.metric("Status", selected_row.get("Status", "") or "N/A")
-
-                s5, s6, s7 = st.columns(3)
-                s5.metric("Fees", format_currency_blank(selected_row.get("Fees", 0)) or "$0")
-                s6.metric("Gross Investment", "$0")
-                s7.metric("Current Value", "$0")
+                s3.metric("Fee Amount", format_currency_blank(selected_row.get("Fees", 0)) or "$0")
 
                 st.divider()
                 st.markdown("#### Edit Fee Record")
