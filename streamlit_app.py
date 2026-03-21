@@ -110,9 +110,9 @@ def parse_nullable_money(value):
     return -amount if negative else amount
 
 
-def money_input(label: str, value=0.0, help_text=None, disabled: bool = False) -> float:
+def money_input(label: str, value=0.0, help_text=None, disabled: bool = False, key=None) -> float:
     default_text = f"{float(value):,.0f}" if value not in [None, ""] and not pd.isna(value) else ""
-    raw = st.text_input(label, value=default_text, help=help_text, disabled=disabled)
+    raw = st.text_input(label, value=default_text, help=help_text, disabled=disabled, key=key)
     try:
         return parse_money(raw)
     except Exception:
@@ -120,12 +120,12 @@ def money_input(label: str, value=0.0, help_text=None, disabled: bool = False) -
         st.stop()
 
 
-def nullable_money_input(label: str, value=None, help_text=None, disabled: bool = False):
+def nullable_money_input(label: str, value=None, help_text=None, disabled: bool = False, key=None):
     if value is None or pd.isna(value):
         default_text = ""
     else:
         default_text = f"{float(value):,.0f}"
-    raw = st.text_input(label, value=default_text, help=help_text, disabled=disabled)
+    raw = st.text_input(label, value=default_text, help=help_text, disabled=disabled, key=key)
     try:
         return parse_nullable_money(raw)
     except Exception:
@@ -192,6 +192,12 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df["Status"] = df["Status"].fillna("Active").astype(str).str.strip()
     df["Source of Deal"] = df["Source of Deal"].fillna("").astype(str).str.strip()
 
+    fee_mask = df["Instrument Type"].eq("Fee")
+    df.loc[fee_mask, "Gross Investment"] = 0.0
+    df.loc[fee_mask, "Current Value"] = 0.0
+    df.loc[fee_mask, "Valuation/Cap at Investment"] = pd.NA
+    df.loc[fee_mask & df["Status"].eq(""), "Status"] = "Active"
+
     df = df.dropna(how="all")
     return df
 
@@ -240,7 +246,7 @@ def add_calculated_fields(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["Total Paid"] = out["Gross Investment"] + out["Fees"]
     out["Gain / Loss"] = out["Current Value"] - out["Total Paid"]
-    out["MOIC"] = out["Current Value"] / out["Total Paid"].replace(0, pd.NA)
+    out["MOIC"] = out["Current Value"] / out["Gross Investment"].replace(0, pd.NA)
     out["TVPI"] = out["Current Value"] / out["Total Paid"].replace(0, pd.NA)
     return out
 
@@ -255,11 +261,14 @@ def portfolio_metrics(df: pd.DataFrame) -> dict:
             "gain_loss": 0.0,
             "positions": 0,
             "transactions": 0,
+            "investment_transactions": 0,
+            "fee_records": 0,
             "moic": pd.NA,
             "tvpi": pd.NA,
         }
 
     invest_df = investment_only_df(df)
+    fee_df = fee_only_df(df)
 
     gross_investment = invest_df["Gross Investment"].fillna(0).sum()
     fees = df["Fees"].fillna(0).sum()
@@ -268,7 +277,9 @@ def portfolio_metrics(df: pd.DataFrame) -> dict:
     gain_loss = current_value - total_paid
     positions = invest_df["Company"].replace("", pd.NA).dropna().nunique()
     transactions = len(df)
-    moic = current_value / total_paid if total_paid != 0 else pd.NA
+    investment_transactions = len(invest_df)
+    fee_records = len(fee_df)
+    moic = current_value / gross_investment if gross_investment != 0 else pd.NA
     tvpi = current_value / total_paid if total_paid != 0 else pd.NA
 
     return {
@@ -279,6 +290,8 @@ def portfolio_metrics(df: pd.DataFrame) -> dict:
         "gain_loss": gain_loss,
         "positions": positions,
         "transactions": transactions,
+        "investment_transactions": investment_transactions,
+        "fee_records": fee_records,
         "moic": moic,
         "tvpi": tvpi,
     }
@@ -311,10 +324,35 @@ def company_summary(df: pd.DataFrame) -> pd.DataFrame:
 
     summary["total_paid"] = summary["gross_investment"] + summary["fees"]
     summary["gain_loss"] = summary["current_value"] - summary["total_paid"]
-    summary["moic"] = summary["current_value"] / summary["total_paid"].replace(0, pd.NA)
+    summary["moic"] = summary["current_value"] / summary["gross_investment"].replace(0, pd.NA)
     summary["tvpi"] = summary["current_value"] / summary["total_paid"].replace(0, pd.NA)
 
     summary = summary.sort_values(["gross_investment", "Company"], ascending=[False, True])
+    return summary
+
+
+def org_fee_summary(df: pd.DataFrame) -> pd.DataFrame:
+    fees = fee_only_df(df)
+    if fees.empty:
+        return pd.DataFrame()
+
+    temp = fees.copy()
+    temp["Date_Sort"] = pd.to_datetime(temp["Date"], errors="coerce")
+    temp = temp.sort_values(["Company", "Date_Sort"])
+
+    summary = (
+        temp.groupby("Company", dropna=False)
+        .agg(
+            fee_records=("Company", "count"),
+            total_fees=("Fees", "sum"),
+            latest_date=("Date_Sort", "last"),
+            latest_status=("Status", "last"),
+            latest_source_of_deal=("Source of Deal", "last"),
+        )
+        .reset_index()
+    )
+
+    summary = summary.sort_values(["total_fees", "Company"], ascending=[False, True])
     return summary
 
 
@@ -341,7 +379,10 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
 
     fee_yearly = (
         fee_df.groupby("Year", dropna=False)
-        .agg(fees_only=("Fees", "sum"))
+        .agg(
+            fees_only=("Fees", "sum"),
+            fee_record_count=("Company", "count"),
+        )
         .reset_index()
     )
 
@@ -351,19 +392,31 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
     yearly["fees_only"] = yearly["fees_only"].fillna(0.0)
     yearly["current_value"] = yearly["current_value"].fillna(0.0)
     yearly["deal_count"] = yearly["deal_count"].fillna(0).astype(int)
+    yearly["fee_record_count"] = yearly["fee_record_count"].fillna(0).astype(int)
 
     yearly["fees"] = yearly["fees_on_investments"] + yearly["fees_only"]
     yearly["total_paid"] = yearly["gross_investment"] + yearly["fees"]
     yearly["gain_loss"] = yearly["current_value"] - yearly["total_paid"]
-    yearly["moic"] = yearly["current_value"] / yearly["total_paid"].replace(0, pd.NA)
+    yearly["moic"] = yearly["current_value"] / yearly["gross_investment"].replace(0, pd.NA)
     yearly["tvpi"] = yearly["current_value"] / yearly["total_paid"].replace(0, pd.NA)
 
     return yearly[
-        ["Year", "gross_investment", "fees", "total_paid", "current_value", "gain_loss", "deal_count", "moic", "tvpi"]
+        [
+            "Year",
+            "gross_investment",
+            "fees",
+            "total_paid",
+            "current_value",
+            "gain_loss",
+            "deal_count",
+            "fee_record_count",
+            "moic",
+            "tvpi",
+        ]
     ]
 
 
-def transaction_form(existing_row=None, form_key="transaction_form", is_new=False):
+def investment_form(existing_row=None, form_key="investment_form", is_new=False):
     if existing_row is None:
         existing_row = {}
 
@@ -374,8 +427,8 @@ def transaction_form(existing_row=None, form_key="transaction_form", is_new=Fals
         existing_date = existing_date.date()
 
     existing_instrument = existing_row.get("Instrument Type", "SAFE")
-    if existing_instrument not in INSTRUMENT_OPTIONS:
-        existing_instrument = "Other"
+    if existing_instrument not in INSTRUMENT_OPTIONS or existing_instrument == "Fee":
+        existing_instrument = "SAFE"
 
     existing_status = existing_row.get("Status", "Active")
     if existing_status not in STATUS_OPTIONS:
@@ -386,33 +439,33 @@ def transaction_form(existing_row=None, form_key="transaction_form", is_new=Fals
         with top1:
             date = st.date_input("Date", value=existing_date)
         with top2:
-            company = st.text_input(
-                "Company / Organization" if existing_instrument == "Fee" else "Company",
-                value=existing_row.get("Company", "") or "",
-            )
+            company = st.text_input("Company", value=existing_row.get("Company", "") or "")
         with top3:
             instrument_type = st.selectbox(
                 "Instrument Type",
-                options=INSTRUMENT_OPTIONS,
-                index=INSTRUMENT_OPTIONS.index(existing_instrument),
+                options=[x for x in INSTRUMENT_OPTIONS if x != "Fee"],
+                index=[x for x in INSTRUMENT_OPTIONS if x != "Fee"].index(existing_instrument),
             )
 
         mid1, mid2, mid3 = st.columns(3)
         with mid1:
-            gross_investment = money_input("Gross Investment ($)", existing_row.get("Gross Investment", 0.0))
+            gross_investment = money_input(
+                "Gross Investment ($)",
+                existing_row.get("Gross Investment", 0.0),
+                key=f"{form_key}_gross_investment",
+            )
         with mid2:
             fees = money_input(
                 "Fees ($)",
                 existing_row.get("Fees", 0.0),
                 help_text="You can type commas, for example 1,250",
+                key=f"{form_key}_fees",
             )
         with mid3:
             round_stage = st.text_input("Round / Stage", value=existing_row.get("Round/Stage", "") or "")
 
         if instrument_type in ["SAFE", "Convertible Note"]:
             valuation_help = "For SAFE or convertible note deals, use the cap here when there is one. If there is no cap, leave this blank."
-        elif instrument_type == "Fee":
-            valuation_help = "Leave blank for fee records."
         else:
             valuation_help = "Leave blank if not applicable."
 
@@ -422,7 +475,7 @@ def transaction_form(existing_row=None, form_key="transaction_form", is_new=Fals
                 "Valuation / Cap at Investment ($)",
                 existing_row.get("Valuation/Cap at Investment"),
                 help_text=valuation_help,
-                disabled=(instrument_type == "Fee"),
+                key=f"{form_key}_valuation_cap",
             )
         with bot2:
             source_of_deal = st.text_input("Source of Deal", value=existing_row.get("Source of Deal", "") or "")
@@ -430,24 +483,19 @@ def transaction_form(existing_row=None, form_key="transaction_form", is_new=Fals
         val1, val2 = st.columns(2)
         with val1:
             if is_new:
-                auto_current_value = 0.0 if instrument_type == "Fee" else gross_investment
                 current_value = money_input(
                     "Current Value ($)",
-                    auto_current_value,
+                    gross_investment,
                     help_text="For a new transaction this is set automatically to Gross Investment. Fees are separate and not part of value.",
                     disabled=True,
+                    key=f"{form_key}_current_value_new",
                 )
             else:
-                default_current = existing_row.get("Current Value", 0.0)
-                if instrument_type == "Fee":
-                    current_value = money_input(
-                        "Current Value ($)",
-                        0.0,
-                        help_text="Fee records stay at zero value.",
-                        disabled=True,
-                    )
-                else:
-                    current_value = money_input("Current Value ($)", default_current)
+                current_value = money_input(
+                    "Current Value ($)",
+                    existing_row.get("Current Value", 0.0),
+                    key=f"{form_key}_current_value_edit",
+                )
         with val2:
             if not is_new:
                 status = st.selectbox(
@@ -465,9 +513,7 @@ def transaction_form(existing_row=None, form_key="transaction_form", is_new=Fals
         return None
 
     if is_new:
-        current_value = 0.0 if instrument_type == "Fee" else gross_investment
-    elif instrument_type == "Fee":
-        current_value = 0.0
+        current_value = gross_investment
 
     return {
         "Date": pd.to_datetime(date),
@@ -483,13 +529,102 @@ def transaction_form(existing_row=None, form_key="transaction_form", is_new=Fals
     }
 
 
+def fee_form(existing_row=None, form_key="fee_form", is_new=False):
+    if existing_row is None:
+        existing_row = {}
+
+    existing_date = existing_row.get("Date")
+    if pd.isna(existing_date):
+        existing_date = pd.Timestamp.today().date()
+    elif hasattr(existing_date, "date"):
+        existing_date = existing_date.date()
+
+    existing_status = existing_row.get("Status", "Active")
+    if existing_status not in STATUS_OPTIONS:
+        existing_status = "Other"
+
+    with st.form(form_key, clear_on_submit=False):
+        top1, top2, top3 = st.columns(3)
+        with top1:
+            date = st.date_input("Date", value=existing_date)
+        with top2:
+            organization = st.text_input("Organization", value=existing_row.get("Company", "") or "")
+        with top3:
+            st.text_input("Instrument Type", value="Fee", disabled=True)
+
+        mid1, mid2, mid3 = st.columns(3)
+        with mid1:
+            fee_amount = money_input(
+                "Fees ($)",
+                existing_row.get("Fees", 0.0),
+                help_text="Use this for organization fees such as Irish Angels. You can type commas, for example 1,250",
+                key=f"{form_key}_fee_amount",
+            )
+        with mid2:
+            fee_type = st.text_input("Fee Type / Description", value=existing_row.get("Round/Stage", "") or "")
+        with mid3:
+            source_of_deal = st.text_input("Source of Deal", value=existing_row.get("Source of Deal", "") or "")
+
+        bot1, bot2 = st.columns(2)
+        with bot1:
+            gross_investment = money_input(
+                "Gross Investment ($)",
+                0.0,
+                help_text="Fee records do not have invested capital.",
+                disabled=True,
+                key=f"{form_key}_gross_disabled",
+            )
+        with bot2:
+            current_value = money_input(
+                "Current Value ($)",
+                0.0,
+                help_text="Fee records stay at zero value.",
+                disabled=True,
+                key=f"{form_key}_current_disabled",
+            )
+
+        if not is_new:
+            status = st.selectbox(
+                "Status",
+                options=STATUS_OPTIONS,
+                index=STATUS_OPTIONS.index(existing_status),
+            )
+        else:
+            status = "Active"
+            st.text_input("Status", value="Active", disabled=True)
+
+        submitted = st.form_submit_button("Add Fee Record" if is_new else "Save Fee Changes")
+
+    if not submitted:
+        return None
+
+    return {
+        "Date": pd.to_datetime(date),
+        "Company": organization.strip(),
+        "Instrument Type": "Fee",
+        "Round/Stage": fee_type.strip(),
+        "Gross Investment": 0.0,
+        "Fees": fee_amount,
+        "Current Value": 0.0,
+        "Status": status,
+        "Valuation/Cap at Investment": pd.NA,
+        "Source of Deal": source_of_deal.strip(),
+    }
+
+
 def build_record_label(row) -> str:
     date_val = pd.to_datetime(row["Date"], errors="coerce")
     date_str = date_val.strftime("%Y-%m-%d") if pd.notna(date_val) else "No Date"
-    gross = format_currency_blank(row.get("Gross Investment", 0))
-    fees = format_currency_blank(row.get("Fees", 0))
     instrument = row.get("Instrument Type", "")
     company = row.get("Company", "")
+
+    if instrument == "Fee":
+        fees = format_currency_blank(row.get("Fees", 0))
+        fee_type = row.get("Round/Stage", "")
+        return f"{date_str} | {company} | Fee | {fee_type} | Fees {fees}"
+
+    gross = format_currency_blank(row.get("Gross Investment", 0))
+    fees = format_currency_blank(row.get("Fees", 0))
     return f"{date_str} | {company} | {instrument} | Gross {gross} | Fees {fees}"
 
 
@@ -515,14 +650,16 @@ with st.sidebar:
         3. Download the updated CSV before leaving.
 
         Notes:
-        Use Instrument Type = Fee for organization fees such as Irish Angels.
-        For SAFE or Convertible Note deals, use the cap as valuation when there is one.
-        If there is no cap, leave valuation blank.
+        Use the Investment form for company investments.
+        Use the Organization Fee form for fees such as Irish Angels.
+        Organization fees are stored in the same CSV, but handled separately in the UI.
         Gross Investment is your actual investment into the company.
         Fees are separate deal costs.
-        Total Paid = Gross Investment + Fees
         Current Value excludes fees.
-        MOIC and TVPI are currently shown against Total Paid in this version.
+        MOIC = Current Value / Gross Investment
+        TVPI = Current Value / (Gross Investment + Fees)
+        For SAFE or Convertible Note deals, use the cap as valuation when there is one.
+        If there is no cap, leave valuation blank.
         """
     )
 
@@ -545,7 +682,9 @@ with tab1:
     r2c3.metric("TVPI", format_multiple(metrics["tvpi"]))
     r2c4.metric("Portfolio Companies", f'{metrics["positions"]:,}')
 
-    st.caption("Current Value excludes fees. MOIC and TVPI are currently calculated as Current Value divided by Total Paid.")
+    st.caption(
+        "Current Value excludes fees. MOIC = Current Value / Gross Investment. TVPI = Current Value / (Gross Investment + Fees)."
+    )
 
     st.subheader("Yearly Summary")
     yearly = yearly_summary(df)
@@ -563,7 +702,8 @@ with tab1:
                 "total_paid": "Total Paid",
                 "current_value": "Current Value",
                 "gain_loss": "Gain / Loss",
-                "deal_count": "Deals",
+                "deal_count": "Investment Deals",
+                "fee_record_count": "Fee Records",
                 "moic": "MOIC",
                 "tvpi": "TVPI",
             }
@@ -611,119 +751,289 @@ with tab1:
 
         st.dataframe(display_comp, use_container_width=True, hide_index=True)
 
-with tab2:
-    st.subheader("Add New Investment")
+    st.subheader("Organization Fee Summary")
+    fee_summary = org_fee_summary(df)
+    if fee_summary.empty:
+        st.info("No organization fee records yet.")
+    else:
+        display_fee_summary = fee_summary.copy()
+        display_fee_summary["total_fees"] = display_fee_summary["total_fees"].map(format_currency)
+        display_fee_summary["latest_date"] = pd.to_datetime(display_fee_summary["latest_date"], errors="coerce").dt.strftime(
+            "%Y-%m-%d"
+        )
 
-    new_row = transaction_form(form_key="new_transaction_form", is_new=True)
-    if new_row is not None:
-        if not new_row["Company"]:
-            st.error("Company or organization is required.")
-        else:
-            updated = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-            updated = normalize_dataframe(updated)
-            updated = updated.sort_values(["Date", "Company"], na_position="last").reset_index(drop=True)
-            st.session_state.df = updated
-            st.toast("Transaction added")
-            st.success("Transaction added. Download your CSV to keep it.")
-            st.rerun()
+        display_fee_summary = display_fee_summary.rename(
+            columns={
+                "Company": "Organization",
+                "fee_records": "Fee Records",
+                "total_fees": "Total Fees",
+                "latest_date": "Latest Date",
+                "latest_status": "Status",
+                "latest_source_of_deal": "Source of Deal",
+            }
+        )
+
+        st.dataframe(display_fee_summary, use_container_width=True, hide_index=True)
+
+with tab2:
+    st.subheader("Add Transactions")
+
+    add_investment_tab, add_fee_tab = st.tabs(["Add Investment", "Add Organization Fee"])
+
+    with add_investment_tab:
+        new_row = investment_form(form_key="new_investment_form", is_new=True)
+        if new_row is not None:
+            if not new_row["Company"]:
+                st.error("Company is required.")
+            else:
+                updated = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+                updated = normalize_dataframe(updated)
+                updated = updated.sort_values(["Date", "Company"], na_position="last").reset_index(drop=True)
+                st.session_state.df = updated
+                st.toast("Investment added")
+                st.success("Investment added. Download your CSV to keep it.")
+                st.rerun()
+
+    with add_fee_tab:
+        st.caption("Use this for non investment organization fees such as Irish Angels.")
+        new_fee_row = fee_form(form_key="new_fee_form", is_new=True)
+        if new_fee_row is not None:
+            if not new_fee_row["Company"]:
+                st.error("Organization is required.")
+            else:
+                updated = pd.concat([df, pd.DataFrame([new_fee_row])], ignore_index=True)
+                updated = normalize_dataframe(updated)
+                updated = updated.sort_values(["Date", "Company"], na_position="last").reset_index(drop=True)
+                st.session_state.df = updated
+                st.toast("Fee record added")
+                st.success("Fee record added. Download your CSV to keep it.")
+                st.rerun()
 
 with tab3:
-    st.subheader("Edit Existing Investments")
+    st.subheader("Edit Transactions")
 
-    if df.empty:
-        st.info("No transactions available to edit.")
-    else:
-        st.caption("Filter first, then choose one transaction to edit.")
+    edit_investments_tab, edit_fees_tab = st.tabs(["Edit Investments", "Edit Organization Fees"])
 
-        f1, f2, f3 = st.columns(3)
-        with f1:
-            company_options = ["All"] + sorted([c for c in df["Company"].dropna().unique().tolist() if c != ""])
-            company_filter = st.selectbox("Company / Organization", company_options)
-        with f2:
-            instrument_filter = st.selectbox("Instrument Type", ["All"] + INSTRUMENT_OPTIONS)
-        with f3:
-            status_filter = st.selectbox("Status", ["All"] + STATUS_OPTIONS)
+    with edit_investments_tab:
+        investment_df = investment_only_df(df)
 
-        filtered = df.copy()
-        if company_filter != "All":
-            filtered = filtered[filtered["Company"] == company_filter]
-        if instrument_filter != "All":
-            filtered = filtered[filtered["Instrument Type"] == instrument_filter]
-        if status_filter != "All":
-            filtered = filtered[filtered["Status"] == status_filter]
-
-        if filtered.empty:
-            st.info("No transactions match your filters.")
+        if investment_df.empty:
+            st.info("No investment transactions available to edit.")
         else:
-            filtered = filtered.copy().reset_index()
-            filtered["label"] = filtered.apply(build_record_label, axis=1)
+            st.caption("Filter first, then choose one investment transaction to edit.")
 
-            c1, c2 = st.columns([1, 1])
-            with c1:
-                st.metric("Matching Transactions", f"{len(filtered):,}")
-            with c2:
-                st.metric("Total Transactions", f"{len(df):,}")
+            f1, f2, f3 = st.columns(3)
+            with f1:
+                company_options = ["All"] + sorted(
+                    [c for c in investment_df["Company"].dropna().unique().tolist() if c != ""]
+                )
+                company_filter = st.selectbox("Company", company_options, key="investment_company_filter")
+            with f2:
+                instrument_filter = st.selectbox(
+                    "Instrument Type",
+                    ["All"] + [x for x in INSTRUMENT_OPTIONS if x != "Fee"],
+                    key="investment_instrument_filter",
+                )
+            with f3:
+                status_filter = st.selectbox("Status", ["All"] + STATUS_OPTIONS, key="investment_status_filter")
 
-            selected_label = st.selectbox(
-                "Transaction to Edit",
-                filtered["label"].tolist(),
-                label_visibility="visible",
-            )
-            selected_row_index = filtered.loc[filtered["label"] == selected_label, "index"].iloc[0]
-            selected_row = df.loc[selected_row_index].to_dict()
+            filtered = investment_df.copy()
+            if company_filter != "All":
+                filtered = filtered[filtered["Company"] == company_filter]
+            if instrument_filter != "All":
+                filtered = filtered[filtered["Instrument Type"] == instrument_filter]
+            if status_filter != "All":
+                filtered = filtered[filtered["Status"] == status_filter]
 
-            selected_date = pd.to_datetime(selected_row.get("Date"), errors="coerce")
-            selected_date_str = selected_date.strftime("%Y-%m-%d") if pd.notna(selected_date) else "N/A"
-            selected_total_paid = parse_money(selected_row.get("Gross Investment", 0)) + parse_money(selected_row.get("Fees", 0))
+            if filtered.empty:
+                st.info("No investment transactions match your filters.")
+            else:
+                filtered = filtered.copy().reset_index()
+                filtered["label"] = filtered.apply(build_record_label, axis=1)
 
-            st.markdown("#### Selected Transaction")
-            s1, s2, s3, s4 = st.columns(4)
-            s1.metric("Date", selected_date_str)
-            s2.metric("Company / Org", selected_row.get("Company", "") or "N/A")
-            s3.metric("Instrument", selected_row.get("Instrument Type", "") or "N/A")
-            s4.metric("Status", selected_row.get("Status", "") or "N/A")
+                c1, c2 = st.columns([1, 1])
+                with c1:
+                    st.metric("Matching Investments", f"{len(filtered):,}")
+                with c2:
+                    st.metric("Total Investments", f"{len(investment_df):,}")
 
-            s5, s6, s7, s8 = st.columns(4)
-            s5.metric("Gross Investment", format_currency_blank(selected_row.get("Gross Investment", 0)) or "$0")
-            s6.metric("Fees", format_currency_blank(selected_row.get("Fees", 0)) or "$0")
-            s7.metric("Current Value", format_currency_blank(selected_row.get("Current Value", 0)) or "$0")
-            s8.metric("Total Paid", format_currency_blank(selected_total_paid) or "$0")
+                selected_label = st.selectbox(
+                    "Investment Transaction to Edit",
+                    filtered["label"].tolist(),
+                    key="selected_investment_label",
+                )
+                selected_row_index = filtered.loc[filtered["label"] == selected_label, "index"].iloc[0]
+                selected_row = df.loc[selected_row_index].to_dict()
 
-            st.divider()
-            st.markdown("#### Edit Transaction")
+                selected_date = pd.to_datetime(selected_row.get("Date"), errors="coerce")
+                selected_date_str = selected_date.strftime("%Y-%m-%d") if pd.notna(selected_date) else "N/A"
+                selected_total_paid = parse_money(selected_row.get("Gross Investment", 0)) + parse_money(
+                    selected_row.get("Fees", 0)
+                )
 
-            edited_row = transaction_form(
-                existing_row=selected_row,
-                form_key="edit_transaction_form",
-                is_new=False,
-            )
+                st.markdown("#### Selected Investment")
+                s1, s2, s3, s4 = st.columns(4)
+                s1.metric("Date", selected_date_str)
+                s2.metric("Company", selected_row.get("Company", "") or "N/A")
+                s3.metric("Instrument", selected_row.get("Instrument Type", "") or "N/A")
+                s4.metric("Status", selected_row.get("Status", "") or "N/A")
 
-            if edited_row is not None:
-                if not edited_row["Company"]:
-                    st.error("Company or organization is required.")
-                else:
-                    updated = df.copy()
-                    for key, value in edited_row.items():
-                        updated.at[selected_row_index, key] = value
-                    updated = normalize_dataframe(updated)
-                    updated = updated.sort_values(["Date", "Company"], na_position="last").reset_index(drop=True)
-                    st.session_state.df = updated
-                    st.toast("Transaction updated")
-                    st.success("Transaction updated. Download your CSV to keep it.")
-                    st.rerun()
+                s5, s6, s7, s8 = st.columns(4)
+                s5.metric("Gross Investment", format_currency_blank(selected_row.get("Gross Investment", 0)) or "$0")
+                s6.metric("Fees", format_currency_blank(selected_row.get("Fees", 0)) or "$0")
+                s7.metric("Current Value", format_currency_blank(selected_row.get("Current Value", 0)) or "$0")
+                s8.metric("Total Paid", format_currency_blank(selected_total_paid) or "$0")
 
-            st.divider()
+                st.divider()
+                st.markdown("#### Edit Investment")
 
-            with st.expander("Delete Transaction"):
-                st.write("This removes the selected transaction from the current session.")
-                confirm_delete = st.checkbox("I understand and want to delete this transaction")
-                if st.button("Delete Selected Transaction", type="secondary", disabled=not confirm_delete):
-                    updated = df.drop(index=selected_row_index).reset_index(drop=True)
-                    updated = normalize_dataframe(updated) if not updated.empty else empty_df()
-                    st.session_state.df = updated
-                    st.toast("Transaction deleted")
-                    st.success("Transaction deleted. Download your CSV to keep it.")
-                    st.rerun()
+                edited_row = investment_form(
+                    existing_row=selected_row,
+                    form_key="edit_investment_form",
+                    is_new=False,
+                )
+
+                if edited_row is not None:
+                    if not edited_row["Company"]:
+                        st.error("Company is required.")
+                    else:
+                        updated = df.copy()
+                        for key, value in edited_row.items():
+                            updated.at[selected_row_index, key] = value
+                        updated = normalize_dataframe(updated)
+                        updated = updated.sort_values(["Date", "Company"], na_position="last").reset_index(drop=True)
+                        st.session_state.df = updated
+                        st.toast("Investment updated")
+                        st.success("Investment updated. Download your CSV to keep it.")
+                        st.rerun()
+
+                st.divider()
+
+                with st.expander("Delete Investment Transaction"):
+                    st.write("This removes the selected investment transaction from the current session.")
+                    confirm_delete = st.checkbox(
+                        "I understand and want to delete this investment transaction",
+                        key="confirm_delete_investment",
+                    )
+                    if st.button(
+                        "Delete Selected Investment",
+                        type="secondary",
+                        disabled=not confirm_delete,
+                        key="delete_investment_button",
+                    ):
+                        updated = df.drop(index=selected_row_index).reset_index(drop=True)
+                        updated = normalize_dataframe(updated) if not updated.empty else empty_df()
+                        st.session_state.df = updated
+                        st.toast("Investment deleted")
+                        st.success("Investment deleted. Download your CSV to keep it.")
+                        st.rerun()
+
+    with edit_fees_tab:
+        fee_df = fee_only_df(df)
+
+        if fee_df.empty:
+            st.info("No organization fee records available to edit.")
+        else:
+            st.caption("Filter first, then choose one fee record to edit.")
+
+            f1, f2, f3 = st.columns(3)
+            with f1:
+                org_options = ["All"] + sorted([c for c in fee_df["Company"].dropna().unique().tolist() if c != ""])
+                org_filter = st.selectbox("Organization", org_options, key="fee_org_filter")
+            with f2:
+                fee_type_options = ["All"] + sorted(
+                    [c for c in fee_df["Round/Stage"].dropna().unique().tolist() if c != ""]
+                )
+                fee_type_filter = st.selectbox("Fee Type / Description", fee_type_options, key="fee_type_filter")
+            with f3:
+                status_filter = st.selectbox("Status", ["All"] + STATUS_OPTIONS, key="fee_status_filter")
+
+            filtered = fee_df.copy()
+            if org_filter != "All":
+                filtered = filtered[filtered["Company"] == org_filter]
+            if fee_type_filter != "All":
+                filtered = filtered[filtered["Round/Stage"] == fee_type_filter]
+            if status_filter != "All":
+                filtered = filtered[filtered["Status"] == status_filter]
+
+            if filtered.empty:
+                st.info("No fee records match your filters.")
+            else:
+                filtered = filtered.copy().reset_index()
+                filtered["label"] = filtered.apply(build_record_label, axis=1)
+
+                c1, c2 = st.columns([1, 1])
+                with c1:
+                    st.metric("Matching Fee Records", f"{len(filtered):,}")
+                with c2:
+                    st.metric("Total Fee Records", f"{len(fee_df):,}")
+
+                selected_label = st.selectbox(
+                    "Fee Record to Edit",
+                    filtered["label"].tolist(),
+                    key="selected_fee_label",
+                )
+                selected_row_index = filtered.loc[filtered["label"] == selected_label, "index"].iloc[0]
+                selected_row = df.loc[selected_row_index].to_dict()
+
+                selected_date = pd.to_datetime(selected_row.get("Date"), errors="coerce")
+                selected_date_str = selected_date.strftime("%Y-%m-%d") if pd.notna(selected_date) else "N/A"
+
+                st.markdown("#### Selected Fee Record")
+                s1, s2, s3, s4 = st.columns(4)
+                s1.metric("Date", selected_date_str)
+                s2.metric("Organization", selected_row.get("Company", "") or "N/A")
+                s3.metric("Fee Type", selected_row.get("Round/Stage", "") or "N/A")
+                s4.metric("Status", selected_row.get("Status", "") or "N/A")
+
+                s5, s6, s7 = st.columns(3)
+                s5.metric("Fees", format_currency_blank(selected_row.get("Fees", 0)) or "$0")
+                s6.metric("Gross Investment", "$0")
+                s7.metric("Current Value", "$0")
+
+                st.divider()
+                st.markdown("#### Edit Fee Record")
+
+                edited_fee_row = fee_form(
+                    existing_row=selected_row,
+                    form_key="edit_fee_form",
+                    is_new=False,
+                )
+
+                if edited_fee_row is not None:
+                    if not edited_fee_row["Company"]:
+                        st.error("Organization is required.")
+                    else:
+                        updated = df.copy()
+                        for key, value in edited_fee_row.items():
+                            updated.at[selected_row_index, key] = value
+                        updated = normalize_dataframe(updated)
+                        updated = updated.sort_values(["Date", "Company"], na_position="last").reset_index(drop=True)
+                        st.session_state.df = updated
+                        st.toast("Fee record updated")
+                        st.success("Fee record updated. Download your CSV to keep it.")
+                        st.rerun()
+
+                st.divider()
+
+                with st.expander("Delete Fee Record"):
+                    st.write("This removes the selected fee record from the current session.")
+                    confirm_delete = st.checkbox(
+                        "I understand and want to delete this fee record",
+                        key="confirm_delete_fee",
+                    )
+                    if st.button(
+                        "Delete Selected Fee Record",
+                        type="secondary",
+                        disabled=not confirm_delete,
+                        key="delete_fee_button",
+                    ):
+                        updated = df.drop(index=selected_row_index).reset_index(drop=True)
+                        updated = normalize_dataframe(updated) if not updated.empty else empty_df()
+                        st.session_state.df = updated
+                        st.toast("Fee record deleted")
+                        st.success("Fee record deleted. Download your CSV to keep it.")
+                        st.rerun()
 
 with tab4:
     st.subheader("Upload CSV")
