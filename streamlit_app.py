@@ -238,10 +238,10 @@ def add_calculated_fields(df: pd.DataFrame) -> pd.DataFrame:
         return df.copy()
 
     out = df.copy()
-    out["Net Invested"] = out["Gross Investment"] - out["Fees"]
-    out["Gain / Loss"] = out["Current Value"] - out["Net Invested"]
+    out["Total Paid"] = out["Gross Investment"] + out["Fees"]
+    out["Gain / Loss"] = out["Current Value"] - out["Total Paid"]
     out["MOIC"] = out["Current Value"] / out["Gross Investment"].replace(0, pd.NA)
-    out["TVPI"] = out["Current Value"] / out["Net Invested"].replace(0, pd.NA)
+    out["TVPI"] = out["Current Value"] / out["Gross Investment"].replace(0, pd.NA)
     return out
 
 
@@ -250,7 +250,7 @@ def portfolio_metrics(df: pd.DataFrame) -> dict:
         return {
             "gross_investment": 0.0,
             "fees": 0.0,
-            "net_invested": 0.0,
+            "total_paid": 0.0,
             "current_value": 0.0,
             "gain_loss": 0.0,
             "positions": 0,
@@ -263,18 +263,18 @@ def portfolio_metrics(df: pd.DataFrame) -> dict:
 
     gross_investment = invest_df["Gross Investment"].fillna(0).sum()
     fees = df["Fees"].fillna(0).sum()
-    net_invested = gross_investment - fees
+    total_paid = gross_investment + fees
     current_value = invest_df["Current Value"].fillna(0).sum()
-    gain_loss = current_value - net_invested
+    gain_loss = current_value - total_paid
     positions = invest_df["Company"].replace("", pd.NA).dropna().nunique()
     transactions = len(df)
     moic = current_value / gross_investment if gross_investment != 0 else pd.NA
-    tvpi = current_value / net_invested if net_invested != 0 else pd.NA
+    tvpi = current_value / gross_investment if gross_investment != 0 else pd.NA
 
     return {
         "gross_investment": gross_investment,
         "fees": fees,
-        "net_invested": net_invested,
+        "total_paid": total_paid,
         "current_value": current_value,
         "gain_loss": gain_loss,
         "positions": positions,
@@ -309,12 +309,12 @@ def company_summary(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
 
-    summary["net_invested"] = summary["gross_investment"] - summary["fees"]
-    summary["gain_loss"] = summary["current_value"] - summary["net_invested"]
+    summary["total_paid"] = summary["gross_investment"] + summary["fees"]
+    summary["gain_loss"] = summary["current_value"] - summary["total_paid"]
     summary["moic"] = summary["current_value"] / summary["gross_investment"].replace(0, pd.NA)
-    summary["tvpi"] = summary["current_value"] / summary["net_invested"].replace(0, pd.NA)
+    summary["tvpi"] = summary["current_value"] / summary["gross_investment"].replace(0, pd.NA)
 
-    summary = summary.sort_values(["net_invested", "Company"], ascending=[False, True])
+    summary = summary.sort_values(["gross_investment", "Company"], ascending=[False, True])
     return summary
 
 
@@ -353,13 +353,13 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
     yearly["deal_count"] = yearly["deal_count"].fillna(0).astype(int)
 
     yearly["fees"] = yearly["fees_on_investments"] + yearly["fees_only"]
-    yearly["net_invested"] = yearly["gross_investment"] - yearly["fees"]
-    yearly["gain_loss"] = yearly["current_value"] - yearly["net_invested"]
+    yearly["total_paid"] = yearly["gross_investment"] + yearly["fees"]
+    yearly["gain_loss"] = yearly["current_value"] - yearly["total_paid"]
     yearly["moic"] = yearly["current_value"] / yearly["gross_investment"].replace(0, pd.NA)
-    yearly["tvpi"] = yearly["current_value"] / yearly["net_invested"].replace(0, pd.NA)
+    yearly["tvpi"] = yearly["current_value"] / yearly["gross_investment"].replace(0, pd.NA)
 
     return yearly[
-        ["Year", "gross_investment", "fees", "net_invested", "current_value", "gain_loss", "deal_count", "moic", "tvpi"]
+        ["Year", "gross_investment", "fees", "total_paid", "current_value", "gain_loss", "deal_count", "moic", "tvpi"]
     ]
 
 
@@ -430,7 +430,7 @@ def transaction_form(existing_row=None, form_key="transaction_form", is_new=Fals
                 current_value = money_input(
                     "Current Value ($)",
                     auto_current_value,
-                    help_text="For a new transaction this is set automatically to Gross Investment. Fees are excluded from value.",
+                    help_text="For a new transaction this is set automatically to Gross Investment. Fees are separate and not part of value.",
                     disabled=True,
                 )
             else:
@@ -513,9 +513,10 @@ with st.sidebar:
         Use Instrument Type = Fee for organization fees such as Irish Angels.
         For SAFE or Convertible Note deals, use the cap as valuation when there is one.
         If there is no cap, leave valuation blank.
-        MOIC = Current Value / Gross Investment
-        TVPI = Current Value / Net Invested
-        Net Invested = Gross Investment - Fees
+        Gross Investment is your actual investment into the company.
+        Fees are separate deal costs.
+        Total Paid = Gross Investment + Fees
+        MOIC and TVPI are both based on Gross Investment in this version.
         """
     )
 
@@ -527,9 +528,9 @@ with tab1:
     metrics = portfolio_metrics(df)
 
     r1c1, r1c2, r1c3, r1c4 = st.columns(4)
-    r1c1.metric("Gross Invested", format_currency_blank(metrics["gross_investment"]))
+    r1c1.metric("Gross Investment", format_currency_blank(metrics["gross_investment"]))
     r1c2.metric("Fees", format_currency_blank(metrics["fees"]))
-    r1c3.metric("Net Invested", format_currency_blank(metrics["net_invested"]))
+    r1c3.metric("Total Paid", format_currency_blank(metrics["total_paid"]))
     r1c4.metric("Current Value", format_currency_blank(metrics["current_value"]))
 
     r2c1, r2c2, r2c3, r2c4 = st.columns(4)
@@ -542,16 +543,16 @@ with tab1:
     yearly = yearly_summary(df)
     if not yearly.empty:
         display_yearly = yearly.copy()
-        for col in ["gross_investment", "fees", "net_invested", "current_value", "gain_loss"]:
+        for col in ["gross_investment", "fees", "total_paid", "current_value", "gain_loss"]:
             display_yearly[col] = display_yearly[col].map(format_currency)
         display_yearly["moic"] = display_yearly["moic"].map(format_multiple)
         display_yearly["tvpi"] = display_yearly["tvpi"].map(format_multiple)
 
         display_yearly = display_yearly.rename(
             columns={
-                "gross_investment": "Gross Invested",
+                "gross_investment": "Gross Investment",
                 "fees": "Fees",
-                "net_invested": "Net Invested",
+                "total_paid": "Total Paid",
                 "current_value": "Current Value",
                 "gain_loss": "Gain / Loss",
                 "deal_count": "Deals",
@@ -573,7 +574,7 @@ with tab1:
         for col in [
             "gross_investment",
             "fees",
-            "net_invested",
+            "total_paid",
             "current_value",
             "gain_loss",
             "latest_valuation_cap",
@@ -585,9 +586,9 @@ with tab1:
         display_comp = display_comp.rename(
             columns={
                 "deals": "Deals",
-                "gross_investment": "Gross Invested",
+                "gross_investment": "Gross Investment",
                 "fees": "Fees",
-                "net_invested": "Net Invested",
+                "total_paid": "Total Paid",
                 "current_value": "Current Value",
                 "gain_loss": "Gain / Loss",
                 "moic": "MOIC",
@@ -653,12 +654,13 @@ with tab3:
             selected_row_index = filtered.loc[filtered["label"] == selected_label, "index"].iloc[0]
             selected_row = df.loc[selected_row_index].to_dict()
 
-            meta1, meta2, meta3 = st.columns(3)
-            meta1.info(f"Company: {selected_row.get('Company', '') or 'N/A'}")
-            meta2.info(f"Instrument: {selected_row.get('Instrument Type', '') or 'N/A'}")
-            meta3.info(
-                f"Date: {pd.to_datetime(selected_row.get('Date'), errors='coerce').strftime('%Y-%m-%d') if pd.notna(pd.to_datetime(selected_row.get('Date'), errors='coerce')) else 'N/A'}"
+            summary_line = (
+                f"Selected: {selected_row.get('Company', '') or 'N/A'}"
+                f" | {selected_row.get('Instrument Type', '') or 'N/A'}"
+                f" | {pd.to_datetime(selected_row.get('Date'), errors='coerce').strftime('%Y-%m-%d') if pd.notna(pd.to_datetime(selected_row.get('Date'), errors='coerce')) else 'N/A'}"
+                f" | Gross {format_currency_blank(selected_row.get('Gross Investment', 0))}"
             )
+            st.info(summary_line)
 
             edited_row = transaction_form(
                 existing_row=selected_row,
