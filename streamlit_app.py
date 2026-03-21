@@ -48,16 +48,14 @@ def empty_df() -> pd.DataFrame:
 
 
 def parse_money(value):
-    if value is None:
+    if value is None or pd.isna(value):
         return 0.0
 
     if isinstance(value, (int, float)):
-        if pd.isna(value):
-            return 0.0
         return float(value)
 
     text = str(value).strip()
-    if text == "":
+    if text == "" or text.upper() in {"N/A", "NA", "<NA>", "NONE", "NULL", "NAN"}:
         return 0.0
 
     negative = False
@@ -81,16 +79,14 @@ def parse_money(value):
 
 
 def parse_nullable_money(value):
-    if value is None:
+    if value is None or pd.isna(value):
         return pd.NA
 
     if isinstance(value, (int, float)):
-        if pd.isna(value):
-            return pd.NA
         return float(value)
 
     text = str(value).strip()
-    if text == "" or text.upper() == "N/A":
+    if text == "" or text.upper() in {"N/A", "NA", "<NA>", "NONE", "NULL", "NAN"}:
         return pd.NA
 
     negative = False
@@ -204,6 +200,9 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df.loc[fee_mask, "Current Value"] = 0.0
     df.loc[fee_mask, "Distributions"] = 0.0
     df.loc[fee_mask, "Valuation/Cap at Investment"] = pd.NA
+    df.loc[fee_mask, "Round/Stage"] = ""
+    df.loc[fee_mask, "Source of Deal"] = ""
+    df.loc[fee_mask, "Status"] = "Active"
 
     df = df.dropna(how="all")
     return df
@@ -276,29 +275,28 @@ def portfolio_metrics(df: pd.DataFrame, metric_view: str = "Total") -> dict:
             "current_value": 0.0,
             "distributions": 0.0,
             "display_value": 0.0,
+            "total_value": 0.0,
             "gain_loss": 0.0,
             "positions": 0,
             "transactions": 0,
             "investment_transactions": 0,
-            "fee_records": 0,
             "moic": pd.NA,
             "tvpi": pd.NA,
         }
 
     invest_df = investment_only_df(df)
-    fee_df = fee_only_df(df)
 
     gross_investment = invest_df["Gross Investment"].fillna(0).sum()
     fees = df["Fees"].fillna(0).sum()
     total_paid = gross_investment + fees
     current_value = invest_df["Current Value"].fillna(0).sum()
     distributions = invest_df["Distributions"].fillna(0).sum()
+    total_value = current_value + distributions
     display_value = value_basis_series(invest_df, metric_view).sum()
-    gain_loss = (current_value + distributions) - total_paid
+    gain_loss = total_value - total_paid
     positions = invest_df["Company"].replace("", pd.NA).dropna().nunique()
     transactions = len(df)
     investment_transactions = len(invest_df)
-    fee_records = len(fee_df)
     moic = display_value / gross_investment if gross_investment != 0 else pd.NA
     tvpi = display_value / total_paid if total_paid != 0 else pd.NA
 
@@ -309,11 +307,11 @@ def portfolio_metrics(df: pd.DataFrame, metric_view: str = "Total") -> dict:
         "current_value": current_value,
         "distributions": distributions,
         "display_value": display_value,
+        "total_value": total_value,
         "gain_loss": gain_loss,
         "positions": positions,
         "transactions": transactions,
         "investment_transactions": investment_transactions,
-        "fee_records": fee_records,
         "moic": moic,
         "tvpi": tvpi,
     }
@@ -404,7 +402,6 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
         fee_df.groupby("Year", dropna=False)
         .agg(
             fees_only=("Fees", "sum"),
-            fee_record_count=("Company", "count"),
         )
         .reset_index()
     )
@@ -416,7 +413,6 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
     yearly["current_value"] = yearly["current_value"].fillna(0.0)
     yearly["distributions"] = yearly["distributions"].fillna(0.0)
     yearly["deal_count"] = yearly["deal_count"].fillna(0).astype(int)
-    yearly["fee_record_count"] = yearly["fee_record_count"].fillna(0).astype(int)
 
     yearly["fees"] = yearly["fees_on_investments"] + yearly["fees_only"]
     yearly["total_paid"] = yearly["gross_investment"] + yearly["fees"]
@@ -436,7 +432,6 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
             "total_value",
             "gain_loss",
             "deal_count",
-            "fee_record_count",
             "moic",
             "tvpi",
         ]
@@ -696,22 +691,16 @@ with tab1:
     r1c4.metric(display_value_label, format_currency_blank(metrics["display_value"]))
 
     r2c1, r2c2, r2c3, r2c4 = st.columns(4)
-    r2c1.metric("MOIC", format_multiple(metrics["moic"]))
-    r2c2.metric("TVPI", format_multiple(metrics["tvpi"]))
-    r2c3.metric("Portfolio Companies", f'{metrics["positions"]:,}')
-    r2c4.metric("Transactions", f'{metrics["transactions"]:,}')
+    r2c1.metric("Current Value", format_currency_blank(metrics["current_value"]))
+    r2c2.metric("Distributions", format_currency_blank(metrics["distributions"]))
+    r2c3.metric("MOIC", format_multiple(metrics["moic"]))
+    r2c4.metric("TVPI", format_multiple(metrics["tvpi"]))
 
     r3c1, r3c2, r3c3, r3c4 = st.columns(4)
-    r3c1.metric("Unrealized Value", format_currency_blank(metrics["current_value"]))
-    r3c2.metric("Distributions", format_currency_blank(metrics["distributions"]))
-    r3c3.metric("Total Gain / Loss", format_currency_blank(metrics["gain_loss"]))
-    r3c4.metric("Fee Records", f'{metrics["fee_records"]:,}')
-
-    st.caption(
-        f"{metric_view} view is active. "
-        "MOIC uses Gross Investment as the denominator. "
-        "TVPI uses Gross Investment + Fees as the denominator."
-    )
+    r3c1.metric("Total Gain / Loss", format_currency_blank(metrics["gain_loss"]))
+    r3c2.metric("Portfolio Companies", f'{metrics["positions"]:,}')
+    r3c3.metric("Investment Transactions", f'{metrics["investment_transactions"]:,}')
+    r3c4.metric("All Transactions", f'{metrics["transactions"]:,}')
 
     st.subheader("Yearly Summary")
     yearly = yearly_summary(df)
@@ -740,7 +729,6 @@ with tab1:
                 "total_value": "Total Value",
                 "gain_loss": "Gain / Loss",
                 "deal_count": "Investment Deals",
-                "fee_record_count": "Fee Records",
                 "moic": "MOIC",
                 "tvpi": "TVPI",
             }
