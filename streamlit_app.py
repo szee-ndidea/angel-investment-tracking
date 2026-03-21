@@ -240,8 +240,8 @@ def add_calculated_fields(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["Total Paid"] = out["Gross Investment"] + out["Fees"]
     out["Gain / Loss"] = out["Current Value"] - out["Total Paid"]
-    out["MOIC"] = out["Current Value"] / out["Gross Investment"].replace(0, pd.NA)
-    out["TVPI"] = out["Current Value"] / out["Gross Investment"].replace(0, pd.NA)
+    out["MOIC"] = out["Current Value"] / out["Total Paid"].replace(0, pd.NA)
+    out["TVPI"] = out["Current Value"] / out["Total Paid"].replace(0, pd.NA)
     return out
 
 
@@ -268,8 +268,8 @@ def portfolio_metrics(df: pd.DataFrame) -> dict:
     gain_loss = current_value - total_paid
     positions = invest_df["Company"].replace("", pd.NA).dropna().nunique()
     transactions = len(df)
-    moic = current_value / gross_investment if gross_investment != 0 else pd.NA
-    tvpi = current_value / gross_investment if gross_investment != 0 else pd.NA
+    moic = current_value / total_paid if total_paid != 0 else pd.NA
+    tvpi = current_value / total_paid if total_paid != 0 else pd.NA
 
     return {
         "gross_investment": gross_investment,
@@ -299,7 +299,7 @@ def company_summary(df: pd.DataFrame) -> pd.DataFrame:
             deals=("Company", "count"),
             gross_investment=("Gross Investment", "sum"),
             fees=("Fees", "sum"),
-            current_value=("Current Value", "last"),
+            current_value=("Current Value", "sum"),
             latest_status=("Status", "last"),
             latest_instrument=("Instrument Type", "last"),
             latest_round=("Round/Stage", "last"),
@@ -311,8 +311,8 @@ def company_summary(df: pd.DataFrame) -> pd.DataFrame:
 
     summary["total_paid"] = summary["gross_investment"] + summary["fees"]
     summary["gain_loss"] = summary["current_value"] - summary["total_paid"]
-    summary["moic"] = summary["current_value"] / summary["gross_investment"].replace(0, pd.NA)
-    summary["tvpi"] = summary["current_value"] / summary["gross_investment"].replace(0, pd.NA)
+    summary["moic"] = summary["current_value"] / summary["total_paid"].replace(0, pd.NA)
+    summary["tvpi"] = summary["current_value"] / summary["total_paid"].replace(0, pd.NA)
 
     summary = summary.sort_values(["gross_investment", "Company"], ascending=[False, True])
     return summary
@@ -355,8 +355,8 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
     yearly["fees"] = yearly["fees_on_investments"] + yearly["fees_only"]
     yearly["total_paid"] = yearly["gross_investment"] + yearly["fees"]
     yearly["gain_loss"] = yearly["current_value"] - yearly["total_paid"]
-    yearly["moic"] = yearly["current_value"] / yearly["gross_investment"].replace(0, pd.NA)
-    yearly["tvpi"] = yearly["current_value"] / yearly["gross_investment"].replace(0, pd.NA)
+    yearly["moic"] = yearly["current_value"] / yearly["total_paid"].replace(0, pd.NA)
+    yearly["tvpi"] = yearly["current_value"] / yearly["total_paid"].replace(0, pd.NA)
 
     return yearly[
         ["Year", "gross_investment", "fees", "total_paid", "current_value", "gain_loss", "deal_count", "moic", "tvpi"]
@@ -521,7 +521,8 @@ with st.sidebar:
         Gross Investment is your actual investment into the company.
         Fees are separate deal costs.
         Total Paid = Gross Investment + Fees
-        MOIC and TVPI are both based on Gross Investment in this version.
+        Current Value excludes fees.
+        MOIC and TVPI are currently shown against Total Paid in this version.
         """
     )
 
@@ -544,7 +545,7 @@ with tab1:
     r2c3.metric("TVPI", format_multiple(metrics["tvpi"]))
     r2c4.metric("Portfolio Companies", f'{metrics["positions"]:,}')
 
-    st.caption("MOIC and TVPI are currently shown on Gross Investment only. Fees are tracked separately in Total Paid.")
+    st.caption("Current Value excludes fees. MOIC and TVPI are currently calculated as Current Value divided by Total Paid.")
 
     st.subheader("Yearly Summary")
     yearly = yearly_summary(df)
