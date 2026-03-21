@@ -76,9 +76,9 @@ def parse_money(value) -> float:
     return -amount if negative else amount
 
 
-def money_input(label: str, value=0.0, help_text=None) -> float:
+def money_input(label: str, value=0.0, help_text=None, disabled: bool = False) -> float:
     default_text = f"{float(value):,.0f}" if value not in [None, ""] and not pd.isna(value) else ""
-    raw = st.text_input(label, value=default_text, help=help_text)
+    raw = st.text_input(label, value=default_text, help=help_text, disabled=disabled)
     try:
         return parse_money(raw)
     except Exception:
@@ -277,6 +277,10 @@ def transaction_form(existing_row=None, form_key="transaction_form", is_new=Fals
     if existing_status not in STATUS_OPTIONS:
         existing_status = "Other"
 
+    default_gross = float(existing_row.get("Gross Investment", 0.0) or 0.0)
+    default_fees = float(existing_row.get("Fees", 0.0) or 0.0)
+    default_current_value = float(existing_row.get("Current Value", default_gross + default_fees) or 0.0)
+
     with st.form(form_key, clear_on_submit=False):
         top1, top2, top3 = st.columns(3)
         with top1:
@@ -292,16 +296,16 @@ def transaction_form(existing_row=None, form_key="transaction_form", is_new=Fals
 
         mid1, mid2, mid3 = st.columns(3)
         with mid1:
-            gross_investment = money_input("Gross Investment", existing_row.get("Gross Investment", 0.0))
+            gross_investment = money_input("Gross Investment ($)", existing_row.get("Gross Investment", 0.0))
         with mid2:
-            fees = money_input("Fees", existing_row.get("Fees", 0.0), help_text="You can type commas, for example 1,250")
+            fees = money_input("Fees ($)", existing_row.get("Fees", 0.0), help_text="You can type commas, for example 1,250")
         with mid3:
             round_stage = st.text_input("Round / Stage", value=existing_row.get("Round/Stage", "") or "")
 
         bot1, bot2 = st.columns(2)
         with bot1:
             company_value_at_investment = money_input(
-                "Company Value at Time of Investment",
+                "Company Value at Time of Investment ($)",
                 existing_row.get("Company Value at Investment", 0.0),
             )
         with bot2:
@@ -309,7 +313,16 @@ def transaction_form(existing_row=None, form_key="transaction_form", is_new=Fals
 
         val1, val2 = st.columns(2)
         with val1:
-            current_value = money_input("Current Value", existing_row.get("Current Value", 0.0))
+            if is_new:
+                auto_current_value = gross_investment + fees
+                current_value = money_input(
+                    "Current Value ($)",
+                    auto_current_value,
+                    help_text="For a new transaction this is set automatically to Gross Investment + Fees.",
+                    disabled=True,
+                )
+            else:
+                current_value = money_input("Current Value ($)", default_current_value)
         with val2:
             if not is_new:
                 status = st.selectbox(
@@ -321,10 +334,13 @@ def transaction_form(existing_row=None, form_key="transaction_form", is_new=Fals
                 status = "Active"
                 st.text_input("Status", value="Active", disabled=True)
 
-        submitted = st.form_submit_button("Save Transaction")
+        submitted = st.form_submit_button("Add Transaction" if is_new else "Save Changes")
 
     if not submitted:
         return None
+
+    if is_new:
+        current_value = gross_investment + fees
 
     return {
         "Date": pd.to_datetime(date),
@@ -338,11 +354,6 @@ def transaction_form(existing_row=None, form_key="transaction_form", is_new=Fals
         "Company Value at Investment": company_value_at_investment,
         "Source of Deal": source_of_deal.strip(),
     }
-
-
-def template_csv_bytes() -> bytes:
-    template_df = empty_df()
-    return template_df.to_csv(index=False).encode("utf-8")
 
 
 st.title("Angel Investment Tracker")
@@ -474,7 +485,9 @@ with tab2:
             updated = normalize_dataframe(updated)
             updated = updated.sort_values(["Date", "Company"], na_position="last").reset_index(drop=True)
             st.session_state.df = updated
-            st.success("Investment added to this session. Download your CSV to keep it.")
+            st.toast("Transaction added")
+            st.success("Transaction added. Download your CSV to keep it.")
+            st.balloons()
             st.rerun()
 
 with tab3:
@@ -508,15 +521,15 @@ with tab3:
                 ),
                 "Round/Stage": st.column_config.TextColumn("Round/Stage"),
                 "Gross Investment": st.column_config.TextColumn(
-                    "Gross Investment",
+                    "Gross Investment ($)",
                     help="You can type commas, for example 25,000",
                 ),
                 "Fees": st.column_config.TextColumn(
-                    "Fees",
+                    "Fees ($)",
                     help="You can type commas, for example 1,250",
                 ),
                 "Current Value": st.column_config.TextColumn(
-                    "Current Value",
+                    "Current Value ($)",
                     help="You can type commas, for example 32,500",
                 ),
                 "Status": st.column_config.SelectboxColumn(
@@ -525,7 +538,7 @@ with tab3:
                     required=True,
                 ),
                 "Company Value at Investment": st.column_config.TextColumn(
-                    "Company Value at Investment",
+                    "Company Value at Investment ($)",
                     help="You can type commas, for example 8,000,000",
                 ),
                 "Source of Deal": st.column_config.TextColumn("Source of Deal"),
@@ -556,28 +569,11 @@ with tab3:
                     updated = normalize_dataframe(updated)
                     updated = updated.sort_values(["Date", "Company"], na_position="last").reset_index(drop=True)
                     st.session_state.df = updated
-                    st.success("Table updated in this session. Download your CSV to keep it.")
+                    st.toast("Table updates applied")
+                    st.success("Table updated. Download your CSV to keep it.")
                     st.rerun()
             except Exception as e:
                 st.error(f"Could not apply updates: {e}")
-
-    st.subheader("Current Session Data")
-    display_raw = add_calculated_fields(df)
-    if display_raw.empty:
-        st.info("No data loaded.")
-    else:
-        display_raw = display_raw.copy()
-        for col in [
-            "Gross Investment",
-            "Fees",
-            "Total Invested",
-            "Current Value",
-            "Gain / Loss",
-            "Company Value at Investment",
-        ]:
-            display_raw[col] = display_raw[col].map(format_currency)
-        display_raw["MoM"] = display_raw["MoM"].map(format_multiple)
-        st.dataframe(display_raw, use_container_width=True, hide_index=True)
 
 with tab4:
     st.subheader("Upload CSV")
@@ -588,6 +584,7 @@ with tab4:
             imported = pd.read_csv(uploaded_csv)
             imported = normalize_dataframe(imported)
             st.session_state.df = imported
+            st.toast("CSV uploaded")
             st.success("CSV loaded into this session.")
             st.rerun()
         except Exception as e:
