@@ -14,6 +14,8 @@ EXPECTED_COLUMNS = [
     "Fees",
     "Current Value",
     "Status",
+    "Company Value at Investment",
+    "Source of Deal",
 ]
 
 STATUS_OPTIONS = [
@@ -74,7 +76,7 @@ def parse_money(value) -> float:
     return -amount if negative else amount
 
 
-def money_input(label: str, value=0.0, help_text: str | None = None) -> float:
+def money_input(label: str, value=0.0, help_text=None) -> float:
     default_text = f"{float(value):,.0f}" if value not in [None, ""] and not pd.isna(value) else ""
     raw = st.text_input(label, value=default_text, help=help_text)
     try:
@@ -105,6 +107,12 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         "current value": "Current Value",
         "value": "Current Value",
         "status": "Status",
+        "company value at investment": "Company Value at Investment",
+        "valuation at investment": "Company Value at Investment",
+        "company valuation": "Company Value at Investment",
+        "source of deal": "Source of Deal",
+        "deal source": "Source of Deal",
+        "source": "Source of Deal",
     }
 
     rename_dict = {}
@@ -123,13 +131,14 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
 
-    for col in ["Gross Investment", "Fees", "Current Value"]:
+    for col in ["Gross Investment", "Fees", "Current Value", "Company Value at Investment"]:
         df[col] = df[col].apply(parse_money)
 
     df["Company"] = df["Company"].fillna("").astype(str).str.strip()
     df["Instrument Type"] = df["Instrument Type"].fillna("").astype(str).str.strip()
     df["Round/Stage"] = df["Round/Stage"].fillna("").astype(str).str.strip()
     df["Status"] = df["Status"].fillna("Active").astype(str).str.strip()
+    df["Source of Deal"] = df["Source of Deal"].fillna("").astype(str).str.strip()
 
     df = df.dropna(how="all")
     return df
@@ -211,6 +220,8 @@ def company_summary(df: pd.DataFrame) -> pd.DataFrame:
             latest_status=("Status", "last"),
             latest_instrument=("Instrument Type", "last"),
             latest_round=("Round/Stage", "last"),
+            latest_company_value_at_investment=("Company Value at Investment", "last"),
+            latest_source_of_deal=("Source of Deal", "last"),
         )
         .reset_index()
     )
@@ -248,7 +259,7 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
     return yearly
 
 
-def transaction_form(existing_row=None, form_key="transaction_form"):
+def transaction_form(existing_row=None, form_key="transaction_form", is_new=False):
     if existing_row is None:
         existing_row = {}
 
@@ -267,29 +278,48 @@ def transaction_form(existing_row=None, form_key="transaction_form"):
         existing_status = "Other"
 
     with st.form(form_key, clear_on_submit=False):
-        c1, c2, c3 = st.columns(3)
-
-        with c1:
+        top1, top2, top3 = st.columns(3)
+        with top1:
             date = st.date_input("Date", value=existing_date)
+        with top2:
             company = st.text_input("Company", value=existing_row.get("Company", "") or "")
+        with top3:
             instrument_type = st.selectbox(
                 "Instrument Type",
                 options=INSTRUMENT_OPTIONS,
                 index=INSTRUMENT_OPTIONS.index(existing_instrument),
             )
 
-        with c2:
-            round_stage = st.text_input("Round / Stage", value=existing_row.get("Round/Stage", "") or "")
+        mid1, mid2, mid3 = st.columns(3)
+        with mid1:
             gross_investment = money_input("Gross Investment", existing_row.get("Gross Investment", 0.0))
+        with mid2:
             fees = money_input("Fees", existing_row.get("Fees", 0.0), help_text="You can type commas, for example 1,250")
+        with mid3:
+            round_stage = st.text_input("Round / Stage", value=existing_row.get("Round/Stage", "") or "")
 
-        with c3:
-            current_value = money_input("Current Value", existing_row.get("Current Value", 0.0))
-            status = st.selectbox(
-                "Status",
-                options=STATUS_OPTIONS,
-                index=STATUS_OPTIONS.index(existing_status),
+        bot1, bot2 = st.columns(2)
+        with bot1:
+            company_value_at_investment = money_input(
+                "Company Value at Time of Investment",
+                existing_row.get("Company Value at Investment", 0.0),
             )
+        with bot2:
+            source_of_deal = st.text_input("Source of Deal", value=existing_row.get("Source of Deal", "") or "")
+
+        val1, val2 = st.columns(2)
+        with val1:
+            current_value = money_input("Current Value", existing_row.get("Current Value", 0.0))
+        with val2:
+            if not is_new:
+                status = st.selectbox(
+                    "Status",
+                    options=STATUS_OPTIONS,
+                    index=STATUS_OPTIONS.index(existing_status),
+                )
+            else:
+                status = "Active"
+                st.text_input("Status", value="Active", disabled=True)
 
         submitted = st.form_submit_button("Save Transaction")
 
@@ -305,6 +335,8 @@ def transaction_form(existing_row=None, form_key="transaction_form"):
         "Fees": fees,
         "Current Value": current_value,
         "Status": status,
+        "Company Value at Investment": company_value_at_investment,
+        "Source of Deal": source_of_deal.strip(),
     }
 
 
@@ -343,6 +375,8 @@ with st.sidebar:
         Fees
         Current Value
         Status
+        Company Value at Investment
+        Source of Deal
 
         Total Invested is calculated automatically as Gross Investment + Fees.
         You can type dollar amounts with commas, for example 25,000.
@@ -371,7 +405,14 @@ with tab1:
         st.info("No investments loaded yet. Upload a CSV or add transactions manually.")
     else:
         display_comp = comp.copy()
-        for col in ["gross_investment", "fees", "total_invested", "current_value", "gain_loss"]:
+        for col in [
+            "gross_investment",
+            "fees",
+            "total_invested",
+            "current_value",
+            "gain_loss",
+            "latest_company_value_at_investment",
+        ]:
             display_comp[col] = display_comp[col].map(format_currency)
         display_comp["mom"] = display_comp["mom"].map(format_multiple)
 
@@ -387,6 +428,8 @@ with tab1:
                 "latest_status": "Status",
                 "latest_instrument": "Latest Instrument",
                 "latest_round": "Latest Round/Stage",
+                "latest_company_value_at_investment": "Company Value at Investment",
+                "latest_source_of_deal": "Source of Deal",
             }
         )
 
@@ -422,7 +465,7 @@ with tab1:
 with tab2:
     st.subheader("Add New Investment")
 
-    new_row = transaction_form(form_key="new_transaction_form")
+    new_row = transaction_form(form_key="new_transaction_form", is_new=True)
     if new_row is not None:
         if not new_row["Company"]:
             st.error("Company is required.")
@@ -446,6 +489,9 @@ with tab3:
         edit_df["Gross Investment"] = edit_df["Gross Investment"].map(lambda x: f"{x:,.0f}" if pd.notna(x) else "")
         edit_df["Fees"] = edit_df["Fees"].map(lambda x: f"{x:,.0f}" if pd.notna(x) else "")
         edit_df["Current Value"] = edit_df["Current Value"].map(lambda x: f"{x:,.0f}" if pd.notna(x) else "")
+        edit_df["Company Value at Investment"] = edit_df["Company Value at Investment"].map(
+            lambda x: f"{x:,.0f}" if pd.notna(x) else ""
+        )
 
         edited_table = st.data_editor(
             edit_df,
@@ -478,6 +524,11 @@ with tab3:
                     options=STATUS_OPTIONS,
                     required=True,
                 ),
+                "Company Value at Investment": st.column_config.TextColumn(
+                    "Company Value at Investment",
+                    help="You can type commas, for example 8,000,000",
+                ),
+                "Source of Deal": st.column_config.TextColumn("Source of Deal"),
                 "Delete": st.column_config.CheckboxColumn("Delete"),
             },
         )
@@ -487,13 +538,14 @@ with tab3:
                 updated = edited_table.copy()
                 updated["Date"] = pd.to_datetime(updated["Date"], errors="coerce")
 
-                for col in ["Gross Investment", "Fees", "Current Value"]:
+                for col in ["Gross Investment", "Fees", "Current Value", "Company Value at Investment"]:
                     updated[col] = updated[col].apply(parse_money)
 
                 updated["Company"] = updated["Company"].fillna("").astype(str).str.strip()
                 updated["Instrument Type"] = updated["Instrument Type"].fillna("").astype(str).str.strip()
                 updated["Round/Stage"] = updated["Round/Stage"].fillna("").astype(str).str.strip()
                 updated["Status"] = updated["Status"].fillna("Active").astype(str).str.strip()
+                updated["Source of Deal"] = updated["Source of Deal"].fillna("").astype(str).str.strip()
 
                 updated = updated[updated["Delete"] != True].copy()
                 updated = updated.drop(columns=["Delete"])
@@ -515,7 +567,14 @@ with tab3:
         st.info("No data loaded.")
     else:
         display_raw = display_raw.copy()
-        for col in ["Gross Investment", "Fees", "Total Invested", "Current Value", "Gain / Loss"]:
+        for col in [
+            "Gross Investment",
+            "Fees",
+            "Total Invested",
+            "Current Value",
+            "Gain / Loss",
+            "Company Value at Investment",
+        ]:
             display_raw[col] = display_raw[col].map(format_currency)
         display_raw["MoM"] = display_raw["MoM"].map(format_multiple)
         st.dataframe(display_raw, use_container_width=True, hide_index=True)
@@ -544,15 +603,6 @@ with tab4:
         "Download Current Data",
         data=csv_bytes,
         file_name=file_name,
-        mime="text/csv",
-    )
-
-    st.subheader("Download Blank Template")
-    template_name = f"angel_portfolio_template_{today_str}.csv"
-    st.download_button(
-        "Download Blank CSV Template",
-        data=template_csv_bytes(),
-        file_name=template_name,
         mime="text/csv",
     )
 
