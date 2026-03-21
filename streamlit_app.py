@@ -1,111 +1,121 @@
 from datetime import datetime
-from pathlib import Path
+import io
 
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Angel Portfolio Tracker", layout="wide")
-
-DATA_FILE = Path("portfolio_data.csv")
+st.set_page_config(page_title="Angel Investment Tracker", layout="wide")
 
 EXPECTED_COLUMNS = [
     "Date",
     "Company",
-    "Security Type",
-    "Round",
-    "Investment Amount",
-    "Shares",
-    "Price Per Share",
-    "Post Money Valuation",
+    "Instrument Type",
+    "Round/Stage",
+    "Gross Investment",
+    "Fees",
+    "Total Cash Out",
     "Current Value",
     "Status",
     "Notes",
 ]
 
+STATUS_OPTIONS = [
+    "Active",
+    "Exited",
+    "Written Off",
+    "Partially Realized",
+    "Converted",
+    "Paused",
+    "Other",
+]
 
-def load_data() -> pd.DataFrame:
-    if DATA_FILE.exists():
-        df = pd.read_csv(DATA_FILE)
-    else:
-        df = pd.DataFrame(columns=EXPECTED_COLUMNS)
-
-    for col in EXPECTED_COLUMNS:
-        if col not in df.columns:
-            df[col] = None
-
-    df = df[EXPECTED_COLUMNS].copy()
-
-    if not df.empty:
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        numeric_cols = [
-            "Investment Amount",
-            "Shares",
-            "Price Per Share",
-            "Post Money Valuation",
-            "Current Value",
-        ]
-        for col in numeric_cols:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    return df
+INSTRUMENT_OPTIONS = [
+    "SAFE",
+    "Convertible Note",
+    "Equity",
+    "Loan",
+    "SPV",
+    "Fund",
+    "Other",
+]
 
 
-def save_data(df: pd.DataFrame) -> None:
-    out = df.copy()
-    if "Date" in out.columns:
-        out["Date"] = pd.to_datetime(out["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    out.to_csv(DATA_FILE, index=False)
+def empty_df() -> pd.DataFrame:
+    return pd.DataFrame(columns=EXPECTED_COLUMNS)
 
 
-def clean_imported_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    renamed = {c: str(c).strip() for c in df.columns}
-    df = df.rename(columns=renamed).copy()
+def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = [str(c).strip() for c in df.columns]
 
     column_map = {
         "date": "Date",
         "company": "Company",
-        "security type": "Security Type",
-        "security": "Security Type",
-        "round": "Round",
-        "investment amount": "Investment Amount",
-        "amount": "Investment Amount",
-        "shares": "Shares",
-        "price per share": "Price Per Share",
-        "pps": "Price Per Share",
-        "post money valuation": "Post Money Valuation",
-        "valuation": "Post Money Valuation",
+        "instrument": "Instrument Type",
+        "instrument type": "Instrument Type",
+        "security": "Instrument Type",
+        "security type": "Instrument Type",
+        "round": "Round/Stage",
+        "stage": "Round/Stage",
+        "round/stage": "Round/Stage",
+        "gross investment": "Gross Investment",
+        "investment amount": "Gross Investment",
+        "amount": "Gross Investment",
+        "fees": "Fees",
         "current value": "Current Value",
+        "value": "Current Value",
         "status": "Status",
         "notes": "Notes",
+        "total cash out": "Total Cash Out",
+        "cash out": "Total Cash Out",
+        "total invested": "Total Cash Out",
     }
 
-    normalized = {}
+    rename_dict = {}
     for col in df.columns:
-        key = str(col).strip().lower()
+        key = col.strip().lower()
         if key in column_map:
-            normalized[col] = column_map[key]
+            rename_dict[col] = column_map[key]
 
-    df = df.rename(columns=normalized)
+    df = df.rename(columns=rename_dict)
 
     for col in EXPECTED_COLUMNS:
         if col not in df.columns:
             df[col] = None
 
     df = df[EXPECTED_COLUMNS].copy()
+
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
 
-    numeric_cols = [
-        "Investment Amount",
-        "Shares",
-        "Price Per Share",
-        "Post Money Valuation",
-        "Current Value",
-    ]
+    numeric_cols = ["Gross Investment", "Fees", "Total Cash Out", "Current Value"]
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
+    df["Gross Investment"] = df["Gross Investment"].fillna(0.0)
+    df["Fees"] = df["Fees"].fillna(0.0)
+
+    missing_total_cash_out = df["Total Cash Out"].isna()
+    df.loc[missing_total_cash_out, "Total Cash Out"] = (
+        df.loc[missing_total_cash_out, "Gross Investment"]
+        + df.loc[missing_total_cash_out, "Fees"]
+    )
+
+    df["Current Value"] = df["Current Value"].fillna(0.0)
+    df["Company"] = df["Company"].fillna("").astype(str).str.strip()
+    df["Instrument Type"] = df["Instrument Type"].fillna("").astype(str).str.strip()
+    df["Round/Stage"] = df["Round/Stage"].fillna("").astype(str).str.strip()
+    df["Status"] = df["Status"].fillna("Active").astype(str).str.strip()
+    df["Notes"] = df["Notes"].fillna("").astype(str)
+
     df = df.dropna(how="all")
     return df
+
+
+def export_ready_df(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if not out.empty:
+        out["Date"] = pd.to_datetime(out["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    return out
 
 
 def format_currency(value) -> str:
@@ -114,25 +124,77 @@ def format_currency(value) -> str:
     return f"${value:,.0f}"
 
 
+def format_multiple(value) -> str:
+    if pd.isna(value):
+        return ""
+    return f"{value:.2f}x"
+
+
+def add_calculated_fields(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+
+    out = df.copy()
+    out["Unrealized Gain/Loss"] = out["Current Value"] - out["Total Cash Out"]
+    out["MoM"] = out["Current Value"] / out["Total Cash Out"].replace(0, pd.NA)
+    return out
+
+
+def portfolio_metrics(df: pd.DataFrame) -> dict:
+    if df.empty:
+        return {
+            "gross_investment": 0.0,
+            "fees": 0.0,
+            "total_cash_out": 0.0,
+            "current_value": 0.0,
+            "gain_loss": 0.0,
+            "positions": 0,
+        }
+
+    gross_investment = df["Gross Investment"].fillna(0).sum()
+    fees = df["Fees"].fillna(0).sum()
+    total_cash_out = df["Total Cash Out"].fillna(0).sum()
+    current_value = df["Current Value"].fillna(0).sum()
+    gain_loss = current_value - total_cash_out
+    positions = df["Company"].replace("", pd.NA).dropna().nunique()
+
+    return {
+        "gross_investment": gross_investment,
+        "fees": fees,
+        "total_cash_out": total_cash_out,
+        "current_value": current_value,
+        "gain_loss": gain_loss,
+        "positions": positions,
+    }
+
+
 def company_summary(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
 
+    temp = df.copy()
+    temp["Date_Sort"] = pd.to_datetime(temp["Date"], errors="coerce")
+    temp = temp.sort_values(["Company", "Date_Sort"])
+
     summary = (
-        df.groupby("Company", dropna=False)
+        temp.groupby("Company", dropna=False)
         .agg(
-            total_invested=("Investment Amount", "sum"),
-            total_shares=("Shares", "sum"),
-            latest_value=("Current Value", "last"),
             deals=("Company", "count"),
+            gross_investment=("Gross Investment", "sum"),
+            fees=("Fees", "sum"),
+            total_cash_out=("Total Cash Out", "sum"),
+            current_value=("Current Value", "last"),
             latest_status=("Status", "last"),
+            latest_instrument=("Instrument Type", "last"),
+            latest_round=("Round/Stage", "last"),
         )
         .reset_index()
-        .sort_values(["total_invested", "Company"], ascending=[False, True])
     )
 
-    summary["multiple"] = summary["latest_value"] / summary["total_invested"]
-    summary.replace([float("inf"), -float("inf")], pd.NA, inplace=True)
+    summary["gain_loss"] = summary["current_value"] - summary["total_cash_out"]
+    summary["mom"] = summary["current_value"] / summary["total_cash_out"].replace(0, pd.NA)
+
+    summary = summary.sort_values(["total_cash_out", "Company"], ascending=[False, True])
     return summary
 
 
@@ -146,84 +208,64 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
     yearly = (
         temp.groupby("Year", dropna=False)
         .agg(
-            total_invested=("Investment Amount", "sum"),
+            gross_investment=("Gross Investment", "sum"),
+            fees=("Fees", "sum"),
+            total_cash_out=("Total Cash Out", "sum"),
             current_value=("Current Value", "sum"),
             deal_count=("Company", "count"),
         )
         .reset_index()
         .sort_values("Year")
     )
-    yearly["gain_loss"] = yearly["current_value"] - yearly["total_invested"]
+
+    yearly["gain_loss"] = yearly["current_value"] - yearly["total_cash_out"]
+    yearly["mom"] = yearly["current_value"] / yearly["total_cash_out"].replace(0, pd.NA)
     return yearly
-
-
-def portfolio_metrics(df: pd.DataFrame) -> dict:
-    if df.empty:
-        return {
-            "total_invested": 0.0,
-            "current_value": 0.0,
-            "unrealized_gain": 0.0,
-            "positions": 0,
-        }
-
-    total_invested = df["Investment Amount"].fillna(0).sum()
-    current_value = df["Current Value"].fillna(0).sum()
-    unrealized_gain = current_value - total_invested
-    positions = df["Company"].nunique()
-
-    return {
-        "total_invested": total_invested,
-        "current_value": current_value,
-        "unrealized_gain": unrealized_gain,
-        "positions": positions,
-    }
 
 
 def transaction_form(existing_row=None, form_key="transaction_form"):
     if existing_row is None:
         existing_row = {}
 
+    existing_date = existing_row.get("Date")
+    if pd.isna(existing_date):
+        existing_date = pd.Timestamp.today().date()
+    elif hasattr(existing_date, "date"):
+        existing_date = existing_date.date()
+
+    existing_instrument = existing_row.get("Instrument Type", "SAFE")
+    if existing_instrument not in INSTRUMENT_OPTIONS:
+        existing_instrument = "Other"
+
+    existing_status = existing_row.get("Status", "Active")
+    if existing_status not in STATUS_OPTIONS:
+        existing_status = "Other"
+
     with st.form(form_key, clear_on_submit=False):
         c1, c2, c3 = st.columns(3)
 
         with c1:
-            date_val = existing_row.get("Date")
-            if pd.isna(date_val):
-                date_val = pd.Timestamp.today().date()
-            elif hasattr(date_val, "date"):
-                date_val = date_val.date()
-
-            date = st.date_input("Date", value=date_val)
+            date = st.date_input("Date", value=existing_date)
             company = st.text_input("Company", value=existing_row.get("Company", "") or "")
-            security_type = st.text_input("Security Type", value=existing_row.get("Security Type", "") or "")
-            round_name = st.text_input("Round", value=existing_row.get("Round", "") or "")
+            instrument_type = st.selectbox(
+                "Instrument Type",
+                options=INSTRUMENT_OPTIONS,
+                index=INSTRUMENT_OPTIONS.index(existing_instrument),
+            )
+            round_stage = st.text_input("Round / Stage", value=existing_row.get("Round/Stage", "") or "")
 
         with c2:
-            investment_amount = st.number_input(
-                "Investment Amount",
+            gross_investment = st.number_input(
+                "Gross Investment",
                 min_value=0.0,
-                value=float(existing_row.get("Investment Amount") or 0.0),
+                value=float(existing_row.get("Gross Investment") or 0.0),
                 step=1000.0,
             )
-            shares = st.number_input(
-                "Shares",
+            fees = st.number_input(
+                "Fees",
                 min_value=0.0,
-                value=float(existing_row.get("Shares") or 0.0),
-                step=1.0,
-            )
-            price_per_share = st.number_input(
-                "Price Per Share",
-                min_value=0.0,
-                value=float(existing_row.get("Price Per Share") or 0.0),
-                step=0.01,
-            )
-
-        with c3:
-            post_money_valuation = st.number_input(
-                "Post Money Valuation",
-                min_value=0.0,
-                value=float(existing_row.get("Post Money Valuation") or 0.0),
-                step=10000.0,
+                value=float(existing_row.get("Fees") or 0.0),
+                step=100.0,
             )
             current_value = st.number_input(
                 "Current Value",
@@ -231,17 +273,23 @@ def transaction_form(existing_row=None, form_key="transaction_form"):
                 value=float(existing_row.get("Current Value") or 0.0),
                 step=1000.0,
             )
+
+        with c3:
+            default_total_cash_out = float(existing_row.get("Total Cash Out") or (gross_investment + fees))
+            total_cash_out = st.number_input(
+                "Total Cash Out",
+                min_value=0.0,
+                value=default_total_cash_out,
+                step=1000.0,
+                help="Usually Gross Investment + Fees. You can override it if needed.",
+            )
             status = st.selectbox(
                 "Status",
-                options=["Active", "Exited", "Written Off", "Paused", "Other"],
-                index=["Active", "Exited", "Written Off", "Paused", "Other"].index(
-                    existing_row.get("Status", "Active")
-                    if existing_row.get("Status", "Active") in ["Active", "Exited", "Written Off", "Paused", "Other"]
-                    else "Other"
-                ),
+                options=STATUS_OPTIONS,
+                index=STATUS_OPTIONS.index(existing_status),
             )
+            notes = st.text_area("Notes", value=existing_row.get("Notes", "") or "", height=120)
 
-        notes = st.text_area("Notes", value=existing_row.get("Notes", "") or "")
         submitted = st.form_submit_button("Save Transaction")
 
     if not submitted:
@@ -250,43 +298,54 @@ def transaction_form(existing_row=None, form_key="transaction_form"):
     return {
         "Date": pd.to_datetime(date),
         "Company": company.strip(),
-        "Security Type": security_type.strip(),
-        "Round": round_name.strip(),
-        "Investment Amount": investment_amount,
-        "Shares": shares,
-        "Price Per Share": price_per_share,
-        "Post Money Valuation": post_money_valuation,
+        "Instrument Type": instrument_type,
+        "Round/Stage": round_stage.strip(),
+        "Gross Investment": gross_investment,
+        "Fees": fees,
+        "Total Cash Out": total_cash_out,
         "Current Value": current_value,
         "Status": status,
         "Notes": notes.strip(),
     }
 
 
-st.title("Angel Investment Portfolio Tracker")
+def template_csv_bytes() -> bytes:
+    template_df = empty_df()
+    return template_df.to_csv(index=False).encode("utf-8")
+
+
+st.title("Angel Investment Tracker")
 
 if "df" not in st.session_state:
-    st.session_state.df = load_data()
+    st.session_state.df = empty_df()
 
-df = st.session_state.df.copy()
+df = normalize_dataframe(st.session_state.df) if not st.session_state.df.empty else empty_df()
+st.session_state.df = df
 
 with st.sidebar:
     st.header("Instructions")
     st.markdown(
         """
-        Use this app to track angel investments in a simple transaction ledger.
+        This app does not save data on the server.
 
-        Add Investment
-        Enter a new investment transaction.
+        Your CSV file is the only source of truth.
 
-        Edit Investments
-        Update or delete an existing transaction.
+        How to use it:
+        1. Upload your current CSV in the Upload / Download tab.
+        2. Add, edit, or delete investments during your session.
+        3. Download the updated CSV before leaving.
 
-        Upload / Download
-        Import a CSV file or export your current data.
-
+        Recommended fields:
+        Date
+        Company
+        Instrument Type
+        Round/Stage
+        Gross Investment
+        Fees
+        Total Cash Out
+        Current Value
+        Status
         Notes
-        Your working data is stored locally in `portfolio_data.csv`.
-        Uploaded CSV files should use the same column names when possible.
         """
     )
 
@@ -296,23 +355,42 @@ tab1, tab2, tab3, tab4 = st.tabs(
 
 with tab1:
     metrics = portfolio_metrics(df)
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Invested", format_currency(metrics["total_invested"]))
-    m2.metric("Current Value", format_currency(metrics["current_value"]))
-    m3.metric("Unrealized Gain", format_currency(metrics["unrealized_gain"]))
-    m4.metric("Portfolio Companies", f'{metrics["positions"]:,}')
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Gross Invested", format_currency(metrics["gross_investment"]))
+    c2.metric("Fees", format_currency(metrics["fees"]))
+    c3.metric("Total Cash Out", format_currency(metrics["total_cash_out"]))
+    c4.metric("Current Value", format_currency(metrics["current_value"]))
+    c5.metric("Gain / Loss", format_currency(metrics["gain_loss"]))
+
+    st.caption(f'Portfolio companies: {metrics["positions"]:,}')
 
     st.subheader("Company Summary")
     comp = company_summary(df)
     if comp.empty:
-        st.info("No investments yet.")
+        st.info("No investments loaded yet. Upload a CSV or add transactions manually.")
     else:
         display_comp = comp.copy()
-        display_comp["total_invested"] = display_comp["total_invested"].map(format_currency)
-        display_comp["latest_value"] = display_comp["latest_value"].map(format_currency)
-        display_comp["multiple"] = display_comp["multiple"].map(
-            lambda x: "" if pd.isna(x) else f"{x:.2f}x"
+        for col in ["gross_investment", "fees", "total_cash_out", "current_value", "gain_loss"]:
+            display_comp[col] = display_comp[col].map(format_currency)
+        display_comp["mom"] = display_comp["mom"].map(format_multiple)
+
+        display_comp = display_comp.rename(
+            columns={
+                "Company": "Company",
+                "deals": "Deals",
+                "gross_investment": "Gross Invested",
+                "fees": "Fees",
+                "total_cash_out": "Total Cash Out",
+                "current_value": "Current Value",
+                "gain_loss": "Gain / Loss",
+                "mom": "MoM",
+                "latest_status": "Status",
+                "latest_instrument": "Latest Instrument",
+                "latest_round": "Latest Round/Stage",
+            }
         )
+
         st.dataframe(display_comp, use_container_width=True, hide_index=True)
 
     st.subheader("Yearly Summary")
@@ -321,25 +399,40 @@ with tab1:
         chart_df = yearly.dropna(subset=["Year"]).copy()
         if not chart_df.empty:
             chart_df["Year"] = chart_df["Year"].astype(int).astype(str)
-            st.bar_chart(chart_df.set_index("Year")[["total_invested", "current_value"]])
+            st.bar_chart(chart_df.set_index("Year")[["total_cash_out", "current_value"]])
 
         display_yearly = yearly.copy()
-        for col in ["total_invested", "current_value", "gain_loss"]:
+        for col in ["gross_investment", "fees", "total_cash_out", "current_value", "gain_loss"]:
             display_yearly[col] = display_yearly[col].map(format_currency)
+        display_yearly["mom"] = display_yearly["mom"].map(format_multiple)
+
+        display_yearly = display_yearly.rename(
+            columns={
+                "gross_investment": "Gross Invested",
+                "fees": "Fees",
+                "total_cash_out": "Total Cash Out",
+                "current_value": "Current Value",
+                "gain_loss": "Gain / Loss",
+                "deal_count": "Deals",
+                "mom": "MoM",
+            }
+        )
+
         st.dataframe(display_yearly, use_container_width=True, hide_index=True)
 
 with tab2:
     st.subheader("Add New Investment")
+
     new_row = transaction_form(form_key="new_transaction_form")
     if new_row is not None:
         if not new_row["Company"]:
             st.error("Company is required.")
         else:
             updated = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+            updated = normalize_dataframe(updated)
             updated = updated.sort_values(["Date", "Company"], na_position="last").reset_index(drop=True)
             st.session_state.df = updated
-            save_data(updated)
-            st.success("Investment added.")
+            st.success("Investment added to this session. Download your CSV to keep it.")
             st.rerun()
 
 with tab3:
@@ -354,7 +447,9 @@ with tab3:
             + " | "
             + pd.to_datetime(edit_df["Date"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("No Date")
             + " | "
-            + edit_df["Investment Amount"].fillna(0).map(lambda x: f"${x:,.0f}")
+            + edit_df["Instrument Type"].fillna("")
+            + " | "
+            + edit_df["Total Cash Out"].fillna(0).map(lambda x: f"${x:,.0f}")
         )
 
         selected_label = st.selectbox("Select a transaction", options=edit_df["label"].tolist())
@@ -373,19 +468,30 @@ with tab3:
                     updated = df.copy()
                     for key, value in edited_row.items():
                         updated.at[selected_idx, key] = value
+                    updated = normalize_dataframe(updated)
                     updated = updated.sort_values(["Date", "Company"], na_position="last").reset_index(drop=True)
                     st.session_state.df = updated
-                    save_data(updated)
-                    st.success("Transaction updated.")
+                    st.success("Transaction updated in this session. Download your CSV to keep it.")
                     st.rerun()
 
         with c2:
             if st.button("Delete Transaction", type="secondary"):
                 updated = df.drop(index=selected_idx).reset_index(drop=True)
+                updated = normalize_dataframe(updated) if not updated.empty else empty_df()
                 st.session_state.df = updated
-                save_data(updated)
-                st.success("Transaction deleted.")
+                st.success("Transaction deleted from this session. Download your CSV to keep it.")
                 st.rerun()
+
+    st.subheader("Current Session Data")
+    display_raw = add_calculated_fields(df)
+    if display_raw.empty:
+        st.info("No data loaded.")
+    else:
+        display_raw = display_raw.copy()
+        for col in ["Gross Investment", "Fees", "Total Cash Out", "Current Value", "Unrealized Gain/Loss"]:
+            display_raw[col] = display_raw[col].map(format_currency)
+        display_raw["MoM"] = display_raw["MoM"].map(format_multiple)
+        st.dataframe(display_raw, use_container_width=True, hide_index=True)
 
 with tab4:
     st.subheader("Upload CSV")
@@ -394,19 +500,15 @@ with tab4:
     if uploaded_csv is not None:
         try:
             imported = pd.read_csv(uploaded_csv)
-            imported = clean_imported_dataframe(imported)
+            imported = normalize_dataframe(imported)
             st.session_state.df = imported
-            save_data(imported)
-            st.success("CSV imported successfully.")
+            st.success("CSV loaded into this session.")
             st.rerun()
         except Exception as e:
             st.error(f"CSV import failed: {e}")
 
     st.subheader("Download CSV")
-    export_df = st.session_state.df.copy()
-    if not export_df.empty:
-        export_df["Date"] = pd.to_datetime(export_df["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
-
+    export_df = export_ready_df(st.session_state.df)
     csv_bytes = export_df.to_csv(index=False).encode("utf-8")
     today_str = datetime.today().strftime("%Y-%m-%d")
     file_name = f"angel_portfolio_{today_str}.csv"
@@ -418,6 +520,17 @@ with tab4:
         mime="text/csv",
     )
 
-    if st.button("Save Current Data"):
-        save_data(st.session_state.df)
-        st.success("Data saved locally.")
+    st.subheader("Download Blank Template")
+    template_name = f"angel_portfolio_template_{today_str}.csv"
+    st.download_button(
+        "Download Blank CSV Template",
+        data=template_csv_bytes(),
+        file_name=template_name,
+        mime="text/csv",
+    )
+
+    st.subheader("Session Status")
+    if st.session_state.df.empty:
+        st.info("No CSV loaded yet. You can upload one or start adding transactions and then download the file.")
+    else:
+        st.success("You have working data in this session. Download the CSV when you are done.")
