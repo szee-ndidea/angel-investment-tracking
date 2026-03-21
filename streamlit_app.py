@@ -1,5 +1,4 @@
 from datetime import datetime
-import io
 
 import pandas as pd
 import streamlit as st
@@ -13,10 +12,8 @@ EXPECTED_COLUMNS = [
     "Round/Stage",
     "Gross Investment",
     "Fees",
-    "Total Cash Out",
     "Current Value",
     "Status",
-    "Notes",
 ]
 
 STATUS_OPTIONS = [
@@ -44,6 +41,49 @@ def empty_df() -> pd.DataFrame:
     return pd.DataFrame(columns=EXPECTED_COLUMNS)
 
 
+def parse_money(value) -> float:
+    if value is None:
+        return 0.0
+
+    if isinstance(value, (int, float)):
+        if pd.isna(value):
+            return 0.0
+        return float(value)
+
+    text = str(value).strip()
+    if text == "":
+        return 0.0
+
+    negative = False
+    if text.startswith("(") and text.endswith(")"):
+        negative = True
+        text = text[1:-1]
+
+    text = (
+        text.replace("$", "")
+        .replace(",", "")
+        .replace(" ", "")
+        .replace("USD", "")
+        .replace("usd", "")
+    )
+
+    if text in {"", "-", ".", "-."}:
+        return 0.0
+
+    amount = float(text)
+    return -amount if negative else amount
+
+
+def money_input(label: str, value=0.0, help_text: str | None = None) -> float:
+    default_text = f"{float(value):,.0f}" if value not in [None, ""] and not pd.isna(value) else ""
+    raw = st.text_input(label, value=default_text, help=help_text)
+    try:
+        return parse_money(raw)
+    except Exception:
+        st.error(f"{label} must be a valid dollar amount.")
+        st.stop()
+
+
 def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
@@ -65,10 +105,6 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         "current value": "Current Value",
         "value": "Current Value",
         "status": "Status",
-        "notes": "Notes",
-        "total cash out": "Total Cash Out",
-        "cash out": "Total Cash Out",
-        "total invested": "Total Cash Out",
     }
 
     rename_dict = {}
@@ -87,25 +123,13 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
 
-    numeric_cols = ["Gross Investment", "Fees", "Total Cash Out", "Current Value"]
-    for col in numeric_cols:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+    for col in ["Gross Investment", "Fees", "Current Value"]:
+        df[col] = df[col].apply(parse_money)
 
-    df["Gross Investment"] = df["Gross Investment"].fillna(0.0)
-    df["Fees"] = df["Fees"].fillna(0.0)
-
-    missing_total_cash_out = df["Total Cash Out"].isna()
-    df.loc[missing_total_cash_out, "Total Cash Out"] = (
-        df.loc[missing_total_cash_out, "Gross Investment"]
-        + df.loc[missing_total_cash_out, "Fees"]
-    )
-
-    df["Current Value"] = df["Current Value"].fillna(0.0)
     df["Company"] = df["Company"].fillna("").astype(str).str.strip()
     df["Instrument Type"] = df["Instrument Type"].fillna("").astype(str).str.strip()
     df["Round/Stage"] = df["Round/Stage"].fillna("").astype(str).str.strip()
     df["Status"] = df["Status"].fillna("Active").astype(str).str.strip()
-    df["Notes"] = df["Notes"].fillna("").astype(str)
 
     df = df.dropna(how="all")
     return df
@@ -135,8 +159,9 @@ def add_calculated_fields(df: pd.DataFrame) -> pd.DataFrame:
         return df.copy()
 
     out = df.copy()
-    out["Unrealized Gain/Loss"] = out["Current Value"] - out["Total Cash Out"]
-    out["MoM"] = out["Current Value"] / out["Total Cash Out"].replace(0, pd.NA)
+    out["Total Invested"] = out["Gross Investment"] + out["Fees"]
+    out["Gain / Loss"] = out["Current Value"] - out["Total Invested"]
+    out["MoM"] = out["Current Value"] / out["Total Invested"].replace(0, pd.NA)
     return out
 
 
@@ -145,7 +170,7 @@ def portfolio_metrics(df: pd.DataFrame) -> dict:
         return {
             "gross_investment": 0.0,
             "fees": 0.0,
-            "total_cash_out": 0.0,
+            "total_invested": 0.0,
             "current_value": 0.0,
             "gain_loss": 0.0,
             "positions": 0,
@@ -153,15 +178,15 @@ def portfolio_metrics(df: pd.DataFrame) -> dict:
 
     gross_investment = df["Gross Investment"].fillna(0).sum()
     fees = df["Fees"].fillna(0).sum()
-    total_cash_out = df["Total Cash Out"].fillna(0).sum()
+    total_invested = gross_investment + fees
     current_value = df["Current Value"].fillna(0).sum()
-    gain_loss = current_value - total_cash_out
+    gain_loss = current_value - total_invested
     positions = df["Company"].replace("", pd.NA).dropna().nunique()
 
     return {
         "gross_investment": gross_investment,
         "fees": fees,
-        "total_cash_out": total_cash_out,
+        "total_invested": total_invested,
         "current_value": current_value,
         "gain_loss": gain_loss,
         "positions": positions,
@@ -182,7 +207,6 @@ def company_summary(df: pd.DataFrame) -> pd.DataFrame:
             deals=("Company", "count"),
             gross_investment=("Gross Investment", "sum"),
             fees=("Fees", "sum"),
-            total_cash_out=("Total Cash Out", "sum"),
             current_value=("Current Value", "last"),
             latest_status=("Status", "last"),
             latest_instrument=("Instrument Type", "last"),
@@ -191,10 +215,11 @@ def company_summary(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
 
-    summary["gain_loss"] = summary["current_value"] - summary["total_cash_out"]
-    summary["mom"] = summary["current_value"] / summary["total_cash_out"].replace(0, pd.NA)
+    summary["total_invested"] = summary["gross_investment"] + summary["fees"]
+    summary["gain_loss"] = summary["current_value"] - summary["total_invested"]
+    summary["mom"] = summary["current_value"] / summary["total_invested"].replace(0, pd.NA)
 
-    summary = summary.sort_values(["total_cash_out", "Company"], ascending=[False, True])
+    summary = summary.sort_values(["total_invested", "Company"], ascending=[False, True])
     return summary
 
 
@@ -210,7 +235,6 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
         .agg(
             gross_investment=("Gross Investment", "sum"),
             fees=("Fees", "sum"),
-            total_cash_out=("Total Cash Out", "sum"),
             current_value=("Current Value", "sum"),
             deal_count=("Company", "count"),
         )
@@ -218,8 +242,9 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
         .sort_values("Year")
     )
 
-    yearly["gain_loss"] = yearly["current_value"] - yearly["total_cash_out"]
-    yearly["mom"] = yearly["current_value"] / yearly["total_cash_out"].replace(0, pd.NA)
+    yearly["total_invested"] = yearly["gross_investment"] + yearly["fees"]
+    yearly["gain_loss"] = yearly["current_value"] - yearly["total_invested"]
+    yearly["mom"] = yearly["current_value"] / yearly["total_invested"].replace(0, pd.NA)
     return yearly
 
 
@@ -252,43 +277,19 @@ def transaction_form(existing_row=None, form_key="transaction_form"):
                 options=INSTRUMENT_OPTIONS,
                 index=INSTRUMENT_OPTIONS.index(existing_instrument),
             )
-            round_stage = st.text_input("Round / Stage", value=existing_row.get("Round/Stage", "") or "")
 
         with c2:
-            gross_investment = st.number_input(
-                "Gross Investment",
-                min_value=0.0,
-                value=float(existing_row.get("Gross Investment") or 0.0),
-                step=1000.0,
-            )
-            fees = st.number_input(
-                "Fees",
-                min_value=0.0,
-                value=float(existing_row.get("Fees") or 0.0),
-                step=100.0,
-            )
-            current_value = st.number_input(
-                "Current Value",
-                min_value=0.0,
-                value=float(existing_row.get("Current Value") or 0.0),
-                step=1000.0,
-            )
+            round_stage = st.text_input("Round / Stage", value=existing_row.get("Round/Stage", "") or "")
+            gross_investment = money_input("Gross Investment", existing_row.get("Gross Investment", 0.0))
+            fees = money_input("Fees", existing_row.get("Fees", 0.0), help_text="You can type commas, for example 1,250")
 
         with c3:
-            default_total_cash_out = float(existing_row.get("Total Cash Out") or (gross_investment + fees))
-            total_cash_out = st.number_input(
-                "Total Cash Out",
-                min_value=0.0,
-                value=default_total_cash_out,
-                step=1000.0,
-                help="Usually Gross Investment + Fees. You can override it if needed.",
-            )
+            current_value = money_input("Current Value", existing_row.get("Current Value", 0.0))
             status = st.selectbox(
                 "Status",
                 options=STATUS_OPTIONS,
                 index=STATUS_OPTIONS.index(existing_status),
             )
-            notes = st.text_area("Notes", value=existing_row.get("Notes", "") or "", height=120)
 
         submitted = st.form_submit_button("Save Transaction")
 
@@ -302,10 +303,8 @@ def transaction_form(existing_row=None, form_key="transaction_form"):
         "Round/Stage": round_stage.strip(),
         "Gross Investment": gross_investment,
         "Fees": fees,
-        "Total Cash Out": total_cash_out,
         "Current Value": current_value,
         "Status": status,
-        "Notes": notes.strip(),
     }
 
 
@@ -332,20 +331,21 @@ with st.sidebar:
 
         How to use it:
         1. Upload your current CSV in the Upload / Download tab.
-        2. Add, edit, or delete investments during your session.
+        2. Add or edit investments during your session.
         3. Download the updated CSV before leaving.
 
-        Recommended fields:
+        Fields used:
         Date
         Company
         Instrument Type
         Round/Stage
         Gross Investment
         Fees
-        Total Cash Out
         Current Value
         Status
-        Notes
+
+        Total Invested is calculated automatically as Gross Investment + Fees.
+        You can type dollar amounts with commas, for example 25,000.
         """
     )
 
@@ -359,7 +359,7 @@ with tab1:
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Gross Invested", format_currency(metrics["gross_investment"]))
     c2.metric("Fees", format_currency(metrics["fees"]))
-    c3.metric("Total Cash Out", format_currency(metrics["total_cash_out"]))
+    c3.metric("Total Invested", format_currency(metrics["total_invested"]))
     c4.metric("Current Value", format_currency(metrics["current_value"]))
     c5.metric("Gain / Loss", format_currency(metrics["gain_loss"]))
 
@@ -371,17 +371,16 @@ with tab1:
         st.info("No investments loaded yet. Upload a CSV or add transactions manually.")
     else:
         display_comp = comp.copy()
-        for col in ["gross_investment", "fees", "total_cash_out", "current_value", "gain_loss"]:
+        for col in ["gross_investment", "fees", "total_invested", "current_value", "gain_loss"]:
             display_comp[col] = display_comp[col].map(format_currency)
         display_comp["mom"] = display_comp["mom"].map(format_multiple)
 
         display_comp = display_comp.rename(
             columns={
-                "Company": "Company",
                 "deals": "Deals",
                 "gross_investment": "Gross Invested",
                 "fees": "Fees",
-                "total_cash_out": "Total Cash Out",
+                "total_invested": "Total Invested",
                 "current_value": "Current Value",
                 "gain_loss": "Gain / Loss",
                 "mom": "MoM",
@@ -399,10 +398,10 @@ with tab1:
         chart_df = yearly.dropna(subset=["Year"]).copy()
         if not chart_df.empty:
             chart_df["Year"] = chart_df["Year"].astype(int).astype(str)
-            st.bar_chart(chart_df.set_index("Year")[["total_cash_out", "current_value"]])
+            st.bar_chart(chart_df.set_index("Year")[["total_invested", "current_value"]])
 
         display_yearly = yearly.copy()
-        for col in ["gross_investment", "fees", "total_cash_out", "current_value", "gain_loss"]:
+        for col in ["gross_investment", "fees", "total_invested", "current_value", "gain_loss"]:
             display_yearly[col] = display_yearly[col].map(format_currency)
         display_yearly["mom"] = display_yearly["mom"].map(format_multiple)
 
@@ -410,7 +409,7 @@ with tab1:
             columns={
                 "gross_investment": "Gross Invested",
                 "fees": "Fees",
-                "total_cash_out": "Total Cash Out",
+                "total_invested": "Total Invested",
                 "current_value": "Current Value",
                 "gain_loss": "Gain / Loss",
                 "deal_count": "Deals",
@@ -442,45 +441,73 @@ with tab3:
         st.info("No transactions available to edit.")
     else:
         edit_df = df.copy()
-        edit_df["label"] = (
-            edit_df["Company"].fillna("Unknown")
-            + " | "
-            + pd.to_datetime(edit_df["Date"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("No Date")
-            + " | "
-            + edit_df["Instrument Type"].fillna("")
-            + " | "
-            + edit_df["Total Cash Out"].fillna(0).map(lambda x: f"${x:,.0f}")
+        edit_df["Delete"] = False
+        edit_df["Date"] = pd.to_datetime(edit_df["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        edit_df["Gross Investment"] = edit_df["Gross Investment"].map(lambda x: f"{x:,.0f}" if pd.notna(x) else "")
+        edit_df["Fees"] = edit_df["Fees"].map(lambda x: f"{x:,.0f}" if pd.notna(x) else "")
+        edit_df["Current Value"] = edit_df["Current Value"].map(lambda x: f"{x:,.0f}" if pd.notna(x) else "")
+
+        edited_table = st.data_editor(
+            edit_df,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="fixed",
+            column_config={
+                "Date": st.column_config.TextColumn("Date", help="Use YYYY-MM-DD"),
+                "Company": st.column_config.TextColumn("Company", required=True),
+                "Instrument Type": st.column_config.SelectboxColumn(
+                    "Instrument Type",
+                    options=INSTRUMENT_OPTIONS,
+                    required=True,
+                ),
+                "Round/Stage": st.column_config.TextColumn("Round/Stage"),
+                "Gross Investment": st.column_config.TextColumn(
+                    "Gross Investment",
+                    help="You can type commas, for example 25,000",
+                ),
+                "Fees": st.column_config.TextColumn(
+                    "Fees",
+                    help="You can type commas, for example 1,250",
+                ),
+                "Current Value": st.column_config.TextColumn(
+                    "Current Value",
+                    help="You can type commas, for example 32,500",
+                ),
+                "Status": st.column_config.SelectboxColumn(
+                    "Status",
+                    options=STATUS_OPTIONS,
+                    required=True,
+                ),
+                "Delete": st.column_config.CheckboxColumn("Delete"),
+            },
         )
 
-        selected_label = st.selectbox("Select a transaction", options=edit_df["label"].tolist())
-        selected_idx = edit_df.index[edit_df["label"] == selected_label][0]
-        selected_row = df.loc[selected_idx].to_dict()
+        if st.button("Apply Table Updates"):
+            try:
+                updated = edited_table.copy()
+                updated["Date"] = pd.to_datetime(updated["Date"], errors="coerce")
 
-        edited_row = transaction_form(existing_row=selected_row, form_key="edit_transaction_form")
+                for col in ["Gross Investment", "Fees", "Current Value"]:
+                    updated[col] = updated[col].apply(parse_money)
 
-        c1, c2 = st.columns(2)
+                updated["Company"] = updated["Company"].fillna("").astype(str).str.strip()
+                updated["Instrument Type"] = updated["Instrument Type"].fillna("").astype(str).str.strip()
+                updated["Round/Stage"] = updated["Round/Stage"].fillna("").astype(str).str.strip()
+                updated["Status"] = updated["Status"].fillna("Active").astype(str).str.strip()
 
-        with c1:
-            if edited_row is not None:
-                if not edited_row["Company"]:
-                    st.error("Company is required.")
+                updated = updated[updated["Delete"] != True].copy()
+                updated = updated.drop(columns=["Delete"])
+
+                if updated["Company"].eq("").any():
+                    st.error("Every row must have a company name.")
                 else:
-                    updated = df.copy()
-                    for key, value in edited_row.items():
-                        updated.at[selected_idx, key] = value
                     updated = normalize_dataframe(updated)
                     updated = updated.sort_values(["Date", "Company"], na_position="last").reset_index(drop=True)
                     st.session_state.df = updated
-                    st.success("Transaction updated in this session. Download your CSV to keep it.")
+                    st.success("Table updated in this session. Download your CSV to keep it.")
                     st.rerun()
-
-        with c2:
-            if st.button("Delete Transaction", type="secondary"):
-                updated = df.drop(index=selected_idx).reset_index(drop=True)
-                updated = normalize_dataframe(updated) if not updated.empty else empty_df()
-                st.session_state.df = updated
-                st.success("Transaction deleted from this session. Download your CSV to keep it.")
-                st.rerun()
+            except Exception as e:
+                st.error(f"Could not apply updates: {e}")
 
     st.subheader("Current Session Data")
     display_raw = add_calculated_fields(df)
@@ -488,7 +515,7 @@ with tab3:
         st.info("No data loaded.")
     else:
         display_raw = display_raw.copy()
-        for col in ["Gross Investment", "Fees", "Total Cash Out", "Current Value", "Unrealized Gain/Loss"]:
+        for col in ["Gross Investment", "Fees", "Total Invested", "Current Value", "Gain / Loss"]:
             display_raw[col] = display_raw[col].map(format_currency)
         display_raw["MoM"] = display_raw["MoM"].map(format_multiple)
         st.dataframe(display_raw, use_container_width=True, hide_index=True)
