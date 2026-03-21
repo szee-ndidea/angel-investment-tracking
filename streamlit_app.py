@@ -1,4 +1,4 @@
-import io
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -106,27 +106,6 @@ def clean_imported_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.dropna(how="all")
     return df
-
-
-def import_from_excel(uploaded_file) -> pd.DataFrame:
-    xls = pd.ExcelFile(uploaded_file)
-    combined = []
-
-    for sheet in xls.sheet_names:
-        try:
-            temp = pd.read_excel(uploaded_file, sheet_name=sheet)
-            cleaned = clean_imported_dataframe(temp)
-            if not cleaned.empty and cleaned["Company"].notna().any():
-                combined.append(cleaned)
-        except Exception:
-            continue
-
-    if not combined:
-        raise ValueError("Could not find a usable transaction table in the uploaded workbook.")
-
-    result = pd.concat(combined, ignore_index=True)
-    result = result.dropna(subset=["Company"], how="all")
-    return result
 
 
 def format_currency(value) -> str:
@@ -256,7 +235,9 @@ def transaction_form(existing_row=None, form_key="transaction_form"):
                 "Status",
                 options=["Active", "Exited", "Written Off", "Paused", "Other"],
                 index=["Active", "Exited", "Written Off", "Paused", "Other"].index(
-                    existing_row.get("Status", "Active") if existing_row.get("Status", "Active") in ["Active", "Exited", "Written Off", "Paused", "Other"] else "Other"
+                    existing_row.get("Status", "Active")
+                    if existing_row.get("Status", "Active") in ["Active", "Exited", "Written Off", "Paused", "Other"]
+                    else "Other"
                 ),
             )
 
@@ -289,44 +270,29 @@ if "df" not in st.session_state:
 df = st.session_state.df.copy()
 
 with st.sidebar:
-    st.header("Data")
-    st.caption("Your data is saved locally to portfolio_data.csv")
+    st.header("Instructions")
+    st.markdown(
+        """
+        Use this app to track angel investments in a simple transaction ledger.
 
-    uploaded_csv = st.file_uploader("Import CSV", type=["csv"])
-    uploaded_excel = st.file_uploader("Import Excel", type=["xlsx", "xls"])
+        Add Investment
+        Enter a new investment transaction.
 
-    if uploaded_csv is not None:
-        try:
-            imported = pd.read_csv(uploaded_csv)
-            imported = clean_imported_dataframe(imported)
-            st.session_state.df = imported
-            save_data(imported)
-            st.success("CSV imported successfully.")
-            st.rerun()
-        except Exception as e:
-            st.error(f"CSV import failed: {e}")
+        Edit Investments
+        Update or delete an existing transaction.
 
-    if uploaded_excel is not None:
-        try:
-            imported = import_from_excel(uploaded_excel)
-            st.session_state.df = imported
-            save_data(imported)
-            st.success("Excel file imported successfully.")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Excel import failed: {e}")
+        Upload / Download
+        Import a CSV file or export your current data.
 
-    if st.button("Save Current Data"):
-        save_data(st.session_state.df)
-        st.success("Data saved.")
+        Notes
+        Your working data is stored locally in `portfolio_data.csv`.
+        Uploaded CSV files should use the same column names when possible.
+        """
+    )
 
-    export_df = st.session_state.df.copy()
-    if not export_df.empty:
-        export_df["Date"] = pd.to_datetime(export_df["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    csv_bytes = export_df.to_csv(index=False).encode("utf-8")
-    st.download_button("Download CSV", data=csv_bytes, file_name="portfolio_data.csv", mime="text/csv")
-
-tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Add Investment", "Edit Investments", "Raw Data"])
+tab1, tab2, tab3, tab4 = st.tabs(
+    ["Overview", "Add Investment", "Edit Investments", "Upload / Download"]
+)
 
 with tab1:
     metrics = portfolio_metrics(df)
@@ -422,5 +388,36 @@ with tab3:
                 st.rerun()
 
 with tab4:
-    st.subheader("Raw Data")
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.subheader("Upload CSV")
+    uploaded_csv = st.file_uploader("Import CSV", type=["csv"])
+
+    if uploaded_csv is not None:
+        try:
+            imported = pd.read_csv(uploaded_csv)
+            imported = clean_imported_dataframe(imported)
+            st.session_state.df = imported
+            save_data(imported)
+            st.success("CSV imported successfully.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"CSV import failed: {e}")
+
+    st.subheader("Download CSV")
+    export_df = st.session_state.df.copy()
+    if not export_df.empty:
+        export_df["Date"] = pd.to_datetime(export_df["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+    csv_bytes = export_df.to_csv(index=False).encode("utf-8")
+    today_str = datetime.today().strftime("%Y-%m-%d")
+    file_name = f"angel_portfolio_{today_str}.csv"
+
+    st.download_button(
+        "Download Current Data",
+        data=csv_bytes,
+        file_name=file_name,
+        mime="text/csv",
+    )
+
+    if st.button("Save Current Data"):
+        save_data(st.session_state.df)
+        st.success("Data saved locally.")
