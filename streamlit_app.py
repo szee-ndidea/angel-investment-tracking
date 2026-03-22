@@ -465,7 +465,13 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
     ]
 
 
-def investment_form(existing_row=None, form_key="investment_form", is_new=False, existing_companies=None):
+def investment_form(
+    existing_row=None,
+    form_key="investment_form",
+    is_new=False,
+    existing_companies=None,
+    company_mode="new",
+):
     if existing_row is None:
         existing_row = {}
 
@@ -483,45 +489,31 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False,
         existing_instrument = "SAFE"
 
     existing_status = canonicalize_status(existing_row.get("Status", "Active"))
-    existing_company = existing_row.get("Company", "") or ""
+    existing_company = (existing_row.get("Company", "") or "").strip()
     existing_round_stage = existing_row.get("Round/Stage", "") or ""
     existing_source = existing_row.get("Source of Deal", "") or ""
 
     with st.form(form_key, clear_on_submit=is_new):
-        is_follow_on = False
-        selected_existing_company = None
-
-        if is_new:
-            mode = st.radio(
-                "Investment Type",
-                options=["New Company", "Follow-on"],
-                horizontal=True,
-                key=f"{form_key}_mode",
-            )
-            is_follow_on = mode == "Follow-on"
-
-            if is_follow_on:
-                if existing_companies:
-                    selected_existing_company = st.selectbox(
-                        "Existing Company",
-                        options=existing_companies,
-                        key=f"{form_key}_existing_company",
-                    )
-                    company = selected_existing_company
-                else:
-                    st.info("No existing investment companies yet. Add the first investment as a new company.")
-                    company = st.text_input(
-                        "Company",
-                        value="",
-                        disabled=True,
-                        key=f"{form_key}_company_disabled",
-                    )
-            else:
-                company = st.text_input(
-                    "Company",
-                    value=existing_company,
-                    key=f"{form_key}_company_new",
+        if is_new and company_mode == "follow_on":
+            if existing_companies:
+                default_company_index = 0
+                if existing_company and existing_company in existing_companies:
+                    default_company_index = existing_companies.index(existing_company)
+                company = st.selectbox(
+                    "Existing Company",
+                    options=existing_companies,
+                    index=default_company_index,
+                    key=f"{form_key}_existing_company",
                 )
+            else:
+                st.info("No existing investment companies yet. Add the first investment as a new company.")
+                company = ""
+        elif is_new:
+            company = st.text_input(
+                "Company",
+                value=existing_company,
+                key=f"{form_key}_company_new",
+            )
         else:
             company = st.text_input(
                 "Company",
@@ -727,6 +719,16 @@ def apply_company_exit_update(updated_df: pd.DataFrame, company: str, new_status
     return out
 
 
+def add_row_and_refresh(df: pd.DataFrame, new_row: dict, toast_message: str, success_message: str):
+    updated = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+    updated = normalize_dataframe(updated)
+    updated = updated.sort_values(["Date", "Company"], ascending=[False, True], na_position="last").reset_index(drop=True)
+    st.session_state.df = updated
+    st.toast(toast_message)
+    st.success(success_message)
+    st.rerun()
+
+
 title_col, help_col = st.columns([20, 1])
 with title_col:
     st.title("Angel Investment Tracker")
@@ -910,24 +912,52 @@ with tab2:
     add_investment_tab, add_fee_tab = st.tabs(["Add Investment", "Add Organization Fee"])
 
     with add_investment_tab:
-        new_row = investment_form(
-            form_key="new_investment_form",
-            is_new=True,
-            existing_companies=existing_investment_companies,
-        )
-        if new_row is not None:
-            if not new_row["Company"]:
-                st.error("Company is required.")
+        new_company_tab, follow_on_tab = st.tabs(["New Company", "Follow-on"])
+
+        with new_company_tab:
+            new_row = investment_form(
+                form_key="new_company_investment_form",
+                is_new=True,
+                existing_companies=existing_investment_companies,
+                company_mode="new",
+            )
+            if new_row is not None:
+                if not new_row["Company"]:
+                    st.error("Company is required.")
+                else:
+                    add_row_and_refresh(
+                        df,
+                        new_row,
+                        toast_message="Investment added",
+                        success_message=(
+                            f"Added new investment for {new_row['Company']} with Status = Active, Current Value = "
+                            f"{format_currency_blank(new_row['Current Value'])}, and Distributions = $0."
+                        ),
+                    )
+
+        with follow_on_tab:
+            if not existing_investment_companies:
+                st.info("No existing investment companies yet. Add the first investment as a new company.")
             else:
-                updated = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                updated = normalize_dataframe(updated)
-                updated = updated.sort_values(["Date", "Company"], ascending=[False, True], na_position="last").reset_index(drop=True)
-                st.session_state.df = updated
-                st.toast("Investment added")
-                st.success(
-                    f"Added new investment for {new_row['Company']} with Status = Active, Current Value = {format_currency_blank(new_row['Current Value'])}, and Distributions = $0."
+                follow_on_row = investment_form(
+                    form_key="follow_on_investment_form",
+                    is_new=True,
+                    existing_companies=existing_investment_companies,
+                    company_mode="follow_on",
                 )
-                st.rerun()
+                if follow_on_row is not None:
+                    if not follow_on_row["Company"]:
+                        st.error("Existing Company is required.")
+                    else:
+                        add_row_and_refresh(
+                            df,
+                            follow_on_row,
+                            toast_message="Follow-on added",
+                            success_message=(
+                                f"Added follow-on investment for {follow_on_row['Company']} with Status = Active, Current Value = "
+                                f"{format_currency_blank(follow_on_row['Current Value'])}, and Distributions = $0."
+                            ),
+                        )
 
     with add_fee_tab:
         st.caption("Use this for non investment organization fees such as Irish Angels.")
@@ -936,13 +966,12 @@ with tab2:
             if not new_fee_row["Company"]:
                 st.error("Organization is required.")
             else:
-                updated = pd.concat([df, pd.DataFrame([new_fee_row])], ignore_index=True)
-                updated = normalize_dataframe(updated)
-                updated = updated.sort_values(["Date", "Company"], ascending=[False, True], na_position="last").reset_index(drop=True)
-                st.session_state.df = updated
-                st.toast("Fee record added")
-                st.success("Fee record added. Download your CSV to keep it.")
-                st.rerun()
+                add_row_and_refresh(
+                    df,
+                    new_fee_row,
+                    toast_message="Fee record added",
+                    success_message="Fee record added. Download your CSV to keep it.",
+                )
 
 with tab3:
     st.subheader("Edit Transactions")
