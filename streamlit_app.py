@@ -446,18 +446,48 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
     if existing_status not in STATUS_OPTIONS:
         existing_status = "Other"
 
+    existing_company = existing_row.get("Company", "") or ""
+    existing_round_stage = existing_row.get("Round/Stage", "") or ""
+    existing_source = existing_row.get("Source of Deal", "") or ""
+
+    existing_companies = []
+    if "df" in st.session_state and not st.session_state.df.empty:
+        temp_df = normalize_dataframe(st.session_state.df)
+        existing_companies = sorted([c for c in temp_df["Company"].dropna().unique().tolist() if c != ""])
+
     with st.form(form_key, clear_on_submit=False):
         top1, top2, top3 = st.columns(3)
         with top1:
             date = st.date_input("Date", value=existing_date)
         with top2:
-            company = st.text_input("Company", value=existing_row.get("Company", "") or "")
+            is_follow_on = st.checkbox(
+                "This is a follow-on investment",
+                value=(is_new and existing_company in existing_companies and existing_company != ""),
+                help="Use this when adding another check into an existing portfolio company.",
+                key=f"{form_key}_is_follow_on",
+            )
         with top3:
             investment_instruments = [x for x in INSTRUMENT_OPTIONS if x != "Fee"]
             instrument_type = st.selectbox(
                 "Instrument Type",
                 options=investment_instruments,
                 index=investment_instruments.index(existing_instrument),
+            )
+
+        if is_follow_on and existing_companies:
+            selected_default = existing_company if existing_company in existing_companies else existing_companies[0]
+            company = st.selectbox(
+                "Company",
+                options=existing_companies,
+                index=existing_companies.index(selected_default),
+                help="Selecting an existing company keeps the company name consistent for portfolio counts and summaries.",
+                key=f"{form_key}_company_follow_on",
+            )
+        else:
+            company = st.text_input(
+                "Company",
+                value=existing_company,
+                key=f"{form_key}_company_new",
             )
 
         mid1, mid2, mid3 = st.columns(3)
@@ -475,7 +505,7 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
                 key=f"{form_key}_fees",
             )
         with mid3:
-            round_stage = st.text_input("Round / Stage", value=existing_row.get("Round/Stage", "") or "")
+            round_stage = st.text_input("Round / Stage", value=existing_round_stage)
 
         if instrument_type in ["SAFE", "Convertible Note"]:
             valuation_help = "For SAFE or convertible note deals, use the cap here when there is one. If there is no cap, leave this blank."
@@ -491,7 +521,7 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
                 key=f"{form_key}_valuation_cap",
             )
         with bot2:
-            source_of_deal = st.text_input("Source of Deal", value=existing_row.get("Source of Deal", "") or "")
+            source_of_deal = st.text_input("Source of Deal", value=existing_source)
 
         val1, val2, val3 = st.columns(3)
         with val1:
@@ -636,6 +666,7 @@ with st.sidebar:
 
         Notes:
         Use the Investment form for company investments.
+        Use the follow-on checkbox when adding another check into an existing company.
         Use the Organization Fee form for fees such as Irish Angels.
         Organization fees are stored in the same CSV, but handled separately in the UI.
         Gross Investment is your actual investment into the company.
@@ -681,8 +712,8 @@ with tab1:
     r1c4.metric("Total Gain / Loss", format_currency_blank(metrics["gain_loss"]))
 
     r2c1, r2c2, r2c3, r2c4 = st.columns(4)
-    r2c1.metric("Current Value", format_currency_blank(metrics["current_value"]))
-    r2c2.metric("Distributions", format_currency_blank(metrics["distributions"]))
+    r2c1.metric("Distributions", format_currency_blank(metrics["distributions"]))
+    r2c2.metric("Portfolio Companies", f'{metrics["positions"]:,}')
     r2c3.metric("MOIC", format_multiple(metrics["moic"]))
     r2c4.metric("TVPI", format_multiple(metrics["tvpi"]))
 
