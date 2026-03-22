@@ -15,25 +15,29 @@ st.markdown(
         font-weight: 600 !important;
     }
 
-    div[data-testid="stFormSubmitButton"] > button[kind="primary"] {
+    div[data-testid="stFormSubmitButton"] > button[kind="primary"],
+    div[data-testid="stFormSubmitButton"] > button[data-testid="baseButton-primary"] {
+        background-color: #16a34a !important;
+        border: 1px solid #16a34a !important;
+        color: white !important;
+    }
+
+    div[data-testid="stFormSubmitButton"] > button[kind="primary"]:hover,
+    div[data-testid="stFormSubmitButton"] > button[data-testid="baseButton-primary"]:hover {
         background-color: #15803d !important;
         border: 1px solid #15803d !important;
         color: white !important;
     }
 
-    div[data-testid="stFormSubmitButton"] > button[kind="primary"]:hover {
-        background-color: #166534 !important;
-        border: 1px solid #166534 !important;
-        color: white !important;
-    }
-
-    div[data-testid="stFormSubmitButton"] > button[kind="secondary"] {
+    div[data-testid="stFormSubmitButton"] > button[kind="secondary"],
+    div[data-testid="stFormSubmitButton"] > button[data-testid="baseButton-secondary"] {
         background-color: #dc2626 !important;
         border: 1px solid #dc2626 !important;
         color: white !important;
     }
 
-    div[data-testid="stFormSubmitButton"] > button[kind="secondary"]:hover {
+    div[data-testid="stFormSubmitButton"] > button[kind="secondary"]:hover,
+    div[data-testid="stFormSubmitButton"] > button[data-testid="baseButton-secondary"]:hover {
         background-color: #b91c1c !important;
         border: 1px solid #b91c1c !important;
         color: white !important;
