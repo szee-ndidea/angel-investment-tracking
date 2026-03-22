@@ -669,7 +669,6 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False):
             fee_amount = money_input(
                 "Fee Amount ($)",
                 existing_row.get("Fees", 0.0),
-                help_text="Use this for organization fees such as Irish Angels.",
                 key=f"{form_key}_fee_amount",
             )
 
@@ -748,7 +747,7 @@ with help_col:
             Notes:
             Use the Investment form for company investments.
             Use the follow-on option when adding another check into an existing company.
-            Use the Organization Fee form for fees such as Irish Angels.
+            Use the Organization Fee form for fees such as an angel group.
             Organization fees are stored in the same CSV, but handled separately in the UI.
             Gross Investment is your actual investment into the company.
             Fees are separate deal costs.
@@ -909,58 +908,56 @@ with tab1:
 with tab2:
     st.subheader("Add Transactions")
 
-    add_investment_tab, add_fee_tab = st.tabs(["Add Investment", "Add Organization Fee"])
+    add_new_investment_tab, add_follow_on_tab, add_fee_tab = st.tabs(
+        ["New Investment", "New Follow-on", "New Organizational Fee"]
+    )
 
-    with add_investment_tab:
-        new_company_tab, follow_on_tab = st.tabs(["New Company", "Follow-on"])
+    with add_new_investment_tab:
+        new_row = investment_form(
+            form_key="new_company_investment_form",
+            is_new=True,
+            existing_companies=existing_investment_companies,
+            company_mode="new",
+        )
+        if new_row is not None:
+            if not new_row["Company"]:
+                st.error("Company is required.")
+            else:
+                add_row_and_refresh(
+                    df,
+                    new_row,
+                    toast_message="Investment added",
+                    success_message=(
+                        f"Added new investment for {new_row['Company']} with Status = Active, Current Value = "
+                        f"{format_currency_blank(new_row['Current Value'])}, and Distributions = $0."
+                    ),
+                )
 
-        with new_company_tab:
-            new_row = investment_form(
-                form_key="new_company_investment_form",
+    with add_follow_on_tab:
+        if not existing_investment_companies:
+            st.info("No existing investment companies yet. Add the first investment as a new company.")
+        else:
+            follow_on_row = investment_form(
+                form_key="follow_on_investment_form",
                 is_new=True,
                 existing_companies=existing_investment_companies,
-                company_mode="new",
+                company_mode="follow_on",
             )
-            if new_row is not None:
-                if not new_row["Company"]:
-                    st.error("Company is required.")
+            if follow_on_row is not None:
+                if not follow_on_row["Company"]:
+                    st.error("Existing Company is required.")
                 else:
                     add_row_and_refresh(
                         df,
-                        new_row,
-                        toast_message="Investment added",
+                        follow_on_row,
+                        toast_message="Follow-on added",
                         success_message=(
-                            f"Added new investment for {new_row['Company']} with Status = Active, Current Value = "
-                            f"{format_currency_blank(new_row['Current Value'])}, and Distributions = $0."
+                            f"Added follow-on investment for {follow_on_row['Company']} with Status = Active, Current Value = "
+                            f"{format_currency_blank(follow_on_row['Current Value'])}, and Distributions = $0."
                         ),
                     )
 
-        with follow_on_tab:
-            if not existing_investment_companies:
-                st.info("No existing investment companies yet. Add the first investment as a new company.")
-            else:
-                follow_on_row = investment_form(
-                    form_key="follow_on_investment_form",
-                    is_new=True,
-                    existing_companies=existing_investment_companies,
-                    company_mode="follow_on",
-                )
-                if follow_on_row is not None:
-                    if not follow_on_row["Company"]:
-                        st.error("Existing Company is required.")
-                    else:
-                        add_row_and_refresh(
-                            df,
-                            follow_on_row,
-                            toast_message="Follow-on added",
-                            success_message=(
-                                f"Added follow-on investment for {follow_on_row['Company']} with Status = Active, Current Value = "
-                                f"{format_currency_blank(follow_on_row['Current Value'])}, and Distributions = $0."
-                            ),
-                        )
-
     with add_fee_tab:
-        st.caption("Use this for non investment organization fees such as Irish Angels.")
         new_fee_row = fee_form(form_key="new_fee_form", is_new=True)
         if new_fee_row is not None:
             if not new_fee_row["Company"]:
@@ -984,8 +981,6 @@ with tab3:
         if investment_df.empty:
             st.info("No investment transactions available to edit.")
         else:
-            st.caption("Filter first, then choose one investment transaction to edit.")
-
             f1, f2, f3 = st.columns(3)
             with f1:
                 company_options = ["All"] + sorted(
@@ -1120,8 +1115,6 @@ with tab3:
         if fee_df.empty:
             st.info("No organization fee records available to edit.")
         else:
-            st.caption("Filter first, then choose one fee record to edit.")
-
             f1, f2 = st.columns(2)
             with f1:
                 org_options = ["All"] + sorted([c for c in fee_df["Company"].dropna().unique().tolist() if c != ""])
