@@ -488,17 +488,46 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False,
     existing_source = existing_row.get("Source of Deal", "") or ""
 
     with st.form(form_key, clear_on_submit=is_new):
+        is_follow_on = False
+        selected_existing_company = None
+
         if is_new:
-            follow_on_col, _ = st.columns([1, 3])
-            with follow_on_col:
-                is_follow_on = st.checkbox(
-                    "Follow-on investment",
-                    value=False,
-                    help="Creates a new transaction row using an existing portfolio company name.",
-                    key=f"{form_key}_is_follow_on",
+            mode = st.radio(
+                "Investment Type",
+                options=["New Company", "Follow-on"],
+                horizontal=True,
+                key=f"{form_key}_mode",
+            )
+            is_follow_on = mode == "Follow-on"
+
+            if is_follow_on:
+                if existing_companies:
+                    selected_existing_company = st.selectbox(
+                        "Existing Company",
+                        options=existing_companies,
+                        key=f"{form_key}_existing_company",
+                    )
+                    company = selected_existing_company
+                else:
+                    st.info("No existing investment companies yet. Add the first investment as a new company.")
+                    company = st.text_input(
+                        "Company",
+                        value="",
+                        disabled=True,
+                        key=f"{form_key}_company_disabled",
+                    )
+            else:
+                company = st.text_input(
+                    "Company",
+                    value=existing_company,
+                    key=f"{form_key}_company_new",
                 )
         else:
-            is_follow_on = False
+            company = st.text_input(
+                "Company",
+                value=existing_company,
+                key=f"{form_key}_company_edit",
+            )
 
         top1, top2 = st.columns(2)
         with top1:
@@ -509,22 +538,6 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False,
                 "Instrument Type",
                 options=investment_instruments,
                 index=investment_instruments.index(existing_instrument),
-            )
-
-        if is_follow_on and existing_companies:
-            selected_default = existing_company if existing_company in existing_companies else existing_companies[0]
-            company = st.selectbox(
-                "Company",
-                options=existing_companies,
-                index=existing_companies.index(selected_default),
-                help="Select an existing company to keep naming clean for portfolio counts and summaries.",
-                key=f"{form_key}_company_follow_on",
-            )
-        else:
-            company = st.text_input(
-                "Company",
-                value=existing_company,
-                key=f"{form_key}_company_new",
             )
 
         mid1, mid2, mid3 = st.columns(3)
@@ -562,23 +575,23 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False,
 
         if is_new:
             status = "Active"
-            current_value = money_input(
-                "Current Value ($)",
-                existing_row.get("Gross Investment", 0.0),
-                help_text="For a new transaction this is set automatically to Gross Investment. Fees are separate and not part of value.",
-                disabled=True,
-                key=f"{form_key}_current_value_new",
-            )
-            distributions = money_input(
-                "Distributions ($)",
-                0.0,
-                help_text="Not used when adding a new investment transaction.",
-                disabled=True,
-                key=f"{form_key}_distributions_new",
-            )
-            st.info(
-                "On save, this will be added as a new transaction row with Status = Active, Current Value = Gross Investment, and Distributions = $0."
-            )
+            val1, val2 = st.columns(2)
+            with val1:
+                current_value = money_input(
+                    "Current Value ($)",
+                    existing_row.get("Gross Investment", 0.0),
+                    help_text="For a new transaction this is set automatically to Gross Investment. Fees are separate and not part of value.",
+                    disabled=True,
+                    key=f"{form_key}_current_value_new",
+                )
+            with val2:
+                distributions = money_input(
+                    "Distributions ($)",
+                    0.0,
+                    help_text="Not used when adding a new investment transaction.",
+                    disabled=True,
+                    key=f"{form_key}_distributions_new",
+                )
         else:
             status = st.selectbox(
                 "Status",
@@ -1013,11 +1026,6 @@ with tab3:
                 s8.metric("Distributions", format_currency_blank(selected_row.get("Distributions", 0)) or "$0")
 
                 st.caption(f"Total Paid: {format_currency_blank(selected_total_paid) or '$0'}")
-
-                if has_follow_ons:
-                    st.info(
-                        f"{company_name} has {len(company_investment_rows):,} investment rows. If you mark this company Exited, Written Off, or Closed, that status will be applied across all of that company’s investment rows."
-                    )
 
                 st.divider()
                 st.markdown("#### Edit Investment")
