@@ -486,7 +486,7 @@ def investment_form(
     existing_companies=None,
     company_mode="new",
     require_confirmation=False,
-    show_submit=True,
+    show_delete=False,
 ):
     if existing_row is None:
         existing_row = {}
@@ -634,23 +634,40 @@ def investment_form(
                 )
 
         confirm_edit = True
+        confirm_delete = True
+
         if require_confirmation:
             confirm_edit = st.checkbox(
                 "I reviewed these changes and want to save them.",
                 key=f"{form_key}_confirm_edit",
             )
 
-        submitted = False
-        if show_submit:
-            submitted = st.form_submit_button(
-                "Add Transaction" if is_new else "Save Changes",
-                disabled=not confirm_edit,
+        if show_delete:
+            confirm_delete = st.checkbox(
+                "Confirm delete",
+                key=f"{form_key}_confirm_delete",
             )
 
-    if not show_submit:
-        submitted = True
+        action_left, action_right = st.columns([4, 1])
 
-    if not submitted:
+        with action_left:
+            save_clicked = st.form_submit_button(
+                "Add Transaction" if is_new else "Save Changes",
+                disabled=not confirm_edit,
+                use_container_width=True,
+            )
+
+        with action_right:
+            delete_clicked = False
+            if show_delete:
+                delete_clicked = st.form_submit_button(
+                    "Delete",
+                    type="secondary",
+                    disabled=not confirm_delete,
+                    use_container_width=True,
+                )
+
+    if not save_clicked and not delete_clicked:
         return None
 
     if is_new:
@@ -687,10 +704,13 @@ def investment_form(
     out_df = pd.DataFrame([out])
     out_df["Status"] = out_df["Status"].apply(canonicalize_status)
     out_df = apply_status_value_rules(out_df)
-    return out_df.iloc[0].to_dict()
+    return {
+        "action": "delete" if delete_clicked else "save",
+        "row": out_df.iloc[0].to_dict(),
+    }
 
 
-def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confirmation=False, show_submit=True):
+def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confirmation=False, show_delete=False):
     if existing_row is None:
         existing_row = {}
 
@@ -714,23 +734,40 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confi
             )
 
         confirm_edit = True
+        confirm_delete = True
+
         if require_confirmation:
             confirm_edit = st.checkbox(
                 "I reviewed these changes and want to save them.",
                 key=f"{form_key}_confirm_edit",
             )
 
-        submitted = False
-        if show_submit:
-            submitted = st.form_submit_button(
-                "Add Fee Record" if is_new else "Save Fee Changes",
-                disabled=not confirm_edit,
+        if show_delete:
+            confirm_delete = st.checkbox(
+                "Confirm delete",
+                key=f"{form_key}_confirm_delete",
             )
 
-    if not show_submit:
-        submitted = True
+        action_left, action_right = st.columns([4, 1])
 
-    if not submitted:
+        with action_left:
+            save_clicked = st.form_submit_button(
+                "Add Fee Record" if is_new else "Save Fee Changes",
+                disabled=not confirm_edit,
+                use_container_width=True,
+            )
+
+        with action_right:
+            delete_clicked = False
+            if show_delete:
+                delete_clicked = st.form_submit_button(
+                    "Delete",
+                    type="secondary",
+                    disabled=not confirm_delete,
+                    use_container_width=True,
+                )
+
+    if not save_clicked and not delete_clicked:
         return None
 
     created_at = str(existing_row.get("Date Added", "") or "").strip()
@@ -741,7 +778,7 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confi
     if not is_new:
         updated_at = now_timestamp()
 
-    return {
+    out = {
         "Date": pd.to_datetime(date),
         "Company": organization.strip(),
         "Instrument Type": "Fee",
@@ -755,6 +792,10 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confi
         "Source of Deal": "",
         "Date Added": created_at,
         "Date Updated": updated_at,
+    }
+    return {
+        "action": "delete" if delete_clicked else "save",
+        "row": out,
     }
 
 
@@ -1002,13 +1043,15 @@ with tab2:
     )
 
     with add_new_investment_tab:
-        new_row = investment_form(
+        result = investment_form(
             form_key="new_company_investment_form",
             is_new=True,
             existing_companies=existing_investment_companies,
             company_mode="new",
+            show_delete=False,
         )
-        if new_row is not None:
+        if result is not None and result["action"] == "save":
+            new_row = result["row"]
             if not new_row["Company"]:
                 st.error("Company is required.")
             else:
@@ -1026,13 +1069,15 @@ with tab2:
         if not existing_investment_companies:
             st.info("No existing investment companies yet. Add the first investment as a new company.")
         else:
-            follow_on_row = investment_form(
+            result = investment_form(
                 form_key="follow_on_investment_form",
                 is_new=True,
                 existing_companies=existing_investment_companies,
                 company_mode="follow_on",
+                show_delete=False,
             )
-            if follow_on_row is not None:
+            if result is not None and result["action"] == "save":
+                follow_on_row = result["row"]
                 if not follow_on_row["Company"]:
                     st.error("Existing Company is required.")
                 else:
@@ -1047,8 +1092,9 @@ with tab2:
                     )
 
     with add_fee_tab:
-        new_fee_row = fee_form(form_key="new_fee_form", is_new=True)
-        if new_fee_row is not None:
+        result = fee_form(form_key="new_fee_form", is_new=True, show_delete=False)
+        if result is not None and result["action"] == "save":
+            new_fee_row = result["row"]
             if not new_fee_row["Company"]:
                 st.error("Organization is required.")
             else:
@@ -1142,68 +1188,50 @@ with tab3:
                 st.caption(f"Date Updated: {selected_row.get('Date Updated', '') or 'N/A'}")
                 st.markdown("#### Edit Investment")
 
-                edit_col, delete_col = st.columns([4, 1])
+                result = investment_form(
+                    existing_row=selected_row,
+                    form_key="edit_investment_form",
+                    is_new=False,
+                    existing_companies=existing_investment_companies,
+                    require_confirmation=True,
+                    show_delete=True,
+                )
 
-                with edit_col:
-                    edited_row = investment_form(
-                        existing_row=selected_row,
-                        form_key="edit_investment_form",
-                        is_new=False,
-                        existing_companies=existing_investment_companies,
-                        require_confirmation=True,
-                        show_submit=True,
-                    )
-
-                with delete_col:
-                    st.write("")
-                    st.write("")
-                    st.write("")
-                    confirm_delete = st.checkbox(
-                        "Confirm delete",
-                        key="confirm_delete_investment",
-                    )
-                    delete_clicked = st.button(
-                        "Delete",
-                        type="secondary",
-                        disabled=not confirm_delete,
-                        key="delete_investment_button",
-                        use_container_width=True,
-                    )
-
-                if delete_clicked:
-                    updated = df.drop(index=selected_row_index).reset_index(drop=True)
-                    updated = normalize_dataframe(updated) if not updated.empty else empty_df()
-                    st.session_state.df = updated
-                    st.toast("Investment deleted")
-                    st.success("Investment deleted. Download your CSV to keep it.")
-                    st.rerun()
-
-                if edited_row is not None:
-                    if not edited_row["Company"]:
-                        st.error("Company is required.")
-                    else:
-                        updated = df.copy()
-                        for key, value in edited_row.items():
-                            updated.at[selected_row_index, key] = value
-
-                        updated = apply_company_exit_update(
-                            updated,
-                            company=edited_row["Company"],
-                            new_status=canonicalize_status(edited_row["Status"]),
-                        )
-
-                        updated = normalize_dataframe(updated)
-                        updated = updated.sort_values(["Date", "Company"], ascending=[False, True], na_position="last").reset_index(drop=True)
+                if result is not None:
+                    if result["action"] == "delete":
+                        updated = df.drop(index=selected_row_index).reset_index(drop=True)
+                        updated = normalize_dataframe(updated) if not updated.empty else empty_df()
                         st.session_state.df = updated
-                        st.toast("Investment updated")
-
-                        if canonicalize_status(edited_row["Status"]) in COMPANY_WIDE_EXIT_STATUSES and has_follow_ons:
-                            st.success(
-                                f"Investment updated. {edited_row['Status']} was applied across all {company_name} investment rows."
-                            )
-                        else:
-                            st.success("Investment updated. Download your CSV to keep it.")
+                        st.toast("Investment deleted")
+                        st.success("Investment deleted. Download your CSV to keep it.")
                         st.rerun()
+                    else:
+                        edited_row = result["row"]
+                        if not edited_row["Company"]:
+                            st.error("Company is required.")
+                        else:
+                            updated = df.copy()
+                            for key, value in edited_row.items():
+                                updated.at[selected_row_index, key] = value
+
+                            updated = apply_company_exit_update(
+                                updated,
+                                company=edited_row["Company"],
+                                new_status=canonicalize_status(edited_row["Status"]),
+                            )
+
+                            updated = normalize_dataframe(updated)
+                            updated = updated.sort_values(["Date", "Company"], ascending=[False, True], na_position="last").reset_index(drop=True)
+                            st.session_state.df = updated
+                            st.toast("Investment updated")
+
+                            if canonicalize_status(edited_row["Status"]) in COMPANY_WIDE_EXIT_STATUSES and has_follow_ons:
+                                st.success(
+                                    f"Investment updated. {edited_row['Status']} was applied across all {company_name} investment rows."
+                                )
+                            else:
+                                st.success("Investment updated. Download your CSV to keep it.")
+                            st.rerun()
 
     with edit_fees_tab:
         fee_df = fee_only_df(df)
@@ -1265,54 +1293,36 @@ with tab3:
                 st.caption(f"Date Updated: {selected_row.get('Date Updated', '') or 'N/A'}")
                 st.markdown("#### Edit Fee Record")
 
-                edit_col, delete_col = st.columns([4, 1])
+                result = fee_form(
+                    existing_row=selected_row,
+                    form_key="edit_fee_form",
+                    is_new=False,
+                    require_confirmation=True,
+                    show_delete=True,
+                )
 
-                with edit_col:
-                    edited_fee_row = fee_form(
-                        existing_row=selected_row,
-                        form_key="edit_fee_form",
-                        is_new=False,
-                        require_confirmation=True,
-                        show_submit=True,
-                    )
-
-                with delete_col:
-                    st.write("")
-                    st.write("")
-                    st.write("")
-                    confirm_delete = st.checkbox(
-                        "Confirm delete",
-                        key="confirm_delete_fee",
-                    )
-                    delete_clicked = st.button(
-                        "Delete",
-                        type="secondary",
-                        disabled=not confirm_delete,
-                        key="delete_fee_button",
-                        use_container_width=True,
-                    )
-
-                if delete_clicked:
-                    updated = df.drop(index=selected_row_index).reset_index(drop=True)
-                    updated = normalize_dataframe(updated) if not updated.empty else empty_df()
-                    st.session_state.df = updated
-                    st.toast("Fee record deleted")
-                    st.success("Fee record deleted. Download your CSV to keep it.")
-                    st.rerun()
-
-                if edited_fee_row is not None:
-                    if not edited_fee_row["Company"]:
-                        st.error("Organization is required.")
-                    else:
-                        updated = df.copy()
-                        for key, value in edited_fee_row.items():
-                            updated.at[selected_row_index, key] = value
-                        updated = normalize_dataframe(updated)
-                        updated = updated.sort_values(["Date", "Company"], ascending=[False, True], na_position="last").reset_index(drop=True)
+                if result is not None:
+                    if result["action"] == "delete":
+                        updated = df.drop(index=selected_row_index).reset_index(drop=True)
+                        updated = normalize_dataframe(updated) if not updated.empty else empty_df()
                         st.session_state.df = updated
-                        st.toast("Fee record updated")
-                        st.success("Fee record updated. Download your CSV to keep it.")
+                        st.toast("Fee record deleted")
+                        st.success("Fee record deleted. Download your CSV to keep it.")
                         st.rerun()
+                    else:
+                        edited_fee_row = result["row"]
+                        if not edited_fee_row["Company"]:
+                            st.error("Organization is required.")
+                        else:
+                            updated = df.copy()
+                            for key, value in edited_fee_row.items():
+                                updated.at[selected_row_index, key] = value
+                            updated = normalize_dataframe(updated)
+                            updated = updated.sort_values(["Date", "Company"], ascending=[False, True], na_position="last").reset_index(drop=True)
+                            st.session_state.df = updated
+                            st.toast("Fee record updated")
+                            st.success("Fee record updated. Download your CSV to keep it.")
+                            st.rerun()
 
 with tab4:
     st.subheader("Upload CSV")
