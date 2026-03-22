@@ -157,40 +157,6 @@ def apply_status_value_rules(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def apply_company_status_rules(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df.copy()
-
-    out = df.copy()
-    invest_mask = out["Instrument Type"].fillna("") != "Fee"
-    invest_df = out.loc[invest_mask].copy()
-
-    if invest_df.empty:
-        return out
-
-    for company, group in invest_df.groupby("Company", dropna=False):
-        company_name = "" if pd.isna(company) else str(company).strip()
-        if company_name == "":
-            continue
-
-        company_statuses = set(group["Status"].dropna().astype(str).tolist())
-
-        if "Exited" in company_statuses:
-            company_mask = invest_mask & out["Company"].eq(company_name)
-            out.loc[company_mask, "Status"] = "Exited"
-            out.loc[company_mask, "Current Value"] = 0.0
-        elif "Closed" in company_statuses:
-            company_mask = invest_mask & out["Company"].eq(company_name)
-            out.loc[company_mask, "Status"] = "Closed"
-            out.loc[company_mask, "Current Value"] = 0.0
-        elif "Written Off" in company_statuses:
-            company_mask = invest_mask & out["Company"].eq(company_name)
-            out.loc[company_mask, "Status"] = "Written Off"
-            out.loc[company_mask, "Current Value"] = 0.0
-
-    return out
-
-
 def money_input(label: str, value=0.0, help_text=None, disabled: bool = False, key=None) -> float:
     default_text = f"{float(value):,.0f}" if value not in [None, ""] and not pd.isna(value) else ""
     raw = st.text_input(label, value=default_text, help=help_text, disabled=disabled, key=key)
@@ -277,8 +243,6 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df["Status"] = df["Status"].apply(canonicalize_status)
     df["Source of Deal"] = df["Source of Deal"].fillna("").astype(str).str.strip()
 
-    df = apply_status_value_rules(df)
-    df = apply_company_status_rules(df)
     df = apply_status_value_rules(df)
     df = df.dropna(how="all")
     return df
