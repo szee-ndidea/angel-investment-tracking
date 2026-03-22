@@ -612,30 +612,32 @@ def build_action_buttons(show_delete: bool, save_label: str):
     return save_clicked, False
 
 
-def build_investment_selector_options(filtered_df: pd.DataFrame):
-    options = []
-    for idx, row in filtered_df.iterrows():
-        date_str = pd.to_datetime(row.get("Date"), errors="coerce")
-        date_str = date_str.strftime("%Y-%m-%d") if pd.notna(date_str) else "N/A"
-        company = row.get("Company", "") or "N/A"
-        instrument = row.get("Instrument Type", "") or "N/A"
-        gross = format_currency_blank(row.get("Gross Investment", 0)) or "$0"
-        fees = format_currency_blank(row.get("Fees", 0)) or "$0"
-        label = f"{date_str} | {company} | {instrument} | Gross {gross} | Fees {fees}"
-        options.append((label, idx))
-    return options
+def build_investment_selector_label(row_index: int, row: pd.Series) -> str:
+    date_str = pd.to_datetime(row.get("Date"), errors="coerce")
+    date_str = date_str.strftime("%Y-%m-%d") if pd.notna(date_str) else "N/A"
+    company = row.get("Company", "") or "N/A"
+    instrument = row.get("Instrument Type", "") or "N/A"
+    gross = format_currency_blank(row.get("Gross Investment", 0)) or "$0"
+    fees = format_currency_blank(row.get("Fees", 0)) or "$0"
+    return f"{date_str} | {company} | {instrument} | Gross {gross} | Fees {fees}"
 
 
-def build_fee_selector_options(filtered_df: pd.DataFrame):
-    options = []
-    for idx, row in filtered_df.iterrows():
-        date_str = pd.to_datetime(row.get("Date"), errors="coerce")
-        date_str = date_str.strftime("%Y-%m-%d") if pd.notna(date_str) else "N/A"
-        org = row.get("Company", "") or "N/A"
-        fee_amount = format_currency_blank(row.get("Fees", 0)) or "$0"
-        label = f"{date_str} | {org} | Fee {fee_amount}"
-        options.append((label, idx))
-    return options
+def build_fee_selector_label(row_index: int, row: pd.Series) -> str:
+    date_str = pd.to_datetime(row.get("Date"), errors="coerce")
+    date_str = date_str.strftime("%Y-%m-%d") if pd.notna(date_str) else "N/A"
+    org = row.get("Company", "") or "N/A"
+    fee_amount = format_currency_blank(row.get("Fees", 0)) or "$0"
+    return f"{date_str} | {org} | Fee {fee_amount}"
+
+
+def get_valid_selected_index(option_indexes, state_key: str):
+    if not option_indexes:
+        return None
+    saved_value = st.session_state.get(state_key)
+    if saved_value in option_indexes:
+        return saved_value
+    st.session_state[state_key] = option_indexes[0]
+    return option_indexes[0]
 
 
 def investment_form(
@@ -1211,16 +1213,19 @@ with tab3:
                 selection_table = build_edit_selection_table(filtered, is_fee=False)
                 st.dataframe(selection_table, use_container_width=True, hide_index=True)
 
-                selector_options = build_investment_selector_options(filtered)
-                selector_labels = [label for label, _ in selector_options]
-                selector_map = {label: idx for label, idx in selector_options}
-
-                selected_label = st.selectbox(
-                    "Investment transaction to edit",
-                    options=selector_labels,
-                    key="selected_investment_transaction_label",
+                selector_indexes = filtered.index.tolist()
+                selected_index_default = get_valid_selected_index(
+                    selector_indexes,
+                    state_key="selected_investment_transaction_index",
                 )
-                selected_row_index = selector_map[selected_label]
+
+                selected_row_index = st.selectbox(
+                    "Investment transaction to edit",
+                    options=selector_indexes,
+                    index=selector_indexes.index(selected_index_default),
+                    format_func=lambda idx: build_investment_selector_label(idx, df.loc[idx]),
+                    key="selected_investment_transaction_index",
+                )
                 selected_row = df.loc[selected_row_index].to_dict()
 
                 selected_date = pd.to_datetime(selected_row.get("Date"), errors="coerce")
@@ -1266,7 +1271,9 @@ with tab3:
                     elif result["action"] == "delete":
                         updated = df.drop(index=selected_row_index).reset_index(drop=True)
                         updated = normalize_dataframe(updated) if not updated.empty else empty_df()
+                        updated = sort_portfolio_df(updated) if not updated.empty else updated
                         st.session_state.df = updated
+                        st.session_state.pop("selected_investment_transaction_index", None)
                         st.toast("Investment deleted")
                         st.success("Investment deleted. Download your CSV to keep it.")
                         st.rerun()
@@ -1288,6 +1295,7 @@ with tab3:
                             updated = normalize_dataframe(updated)
                             updated = sort_portfolio_df(updated)
                             st.session_state.df = updated
+                            st.session_state.pop("selected_investment_transaction_index", None)
                             st.toast("Investment updated")
 
                             if canonicalize_status(edited_row["Status"]) in COMPANY_WIDE_EXIT_STATUSES and has_follow_ons:
@@ -1334,16 +1342,19 @@ with tab3:
                 selection_table = build_edit_selection_table(filtered, is_fee=True)
                 st.dataframe(selection_table, use_container_width=True, hide_index=True)
 
-                selector_options = build_fee_selector_options(filtered)
-                selector_labels = [label for label, _ in selector_options]
-                selector_map = {label: idx for label, idx in selector_options}
-
-                selected_label = st.selectbox(
-                    "Fee record to edit",
-                    options=selector_labels,
-                    key="selected_fee_transaction_label",
+                selector_indexes = filtered.index.tolist()
+                selected_index_default = get_valid_selected_index(
+                    selector_indexes,
+                    state_key="selected_fee_transaction_index",
                 )
-                selected_row_index = selector_map[selected_label]
+
+                selected_row_index = st.selectbox(
+                    "Fee record to edit",
+                    options=selector_indexes,
+                    index=selector_indexes.index(selected_index_default),
+                    format_func=lambda idx: build_fee_selector_label(idx, df.loc[idx]),
+                    key="selected_fee_transaction_index",
+                )
                 selected_row = df.loc[selected_row_index].to_dict()
 
                 selected_date = pd.to_datetime(selected_row.get("Date"), errors="coerce")
@@ -1373,7 +1384,9 @@ with tab3:
                     elif result["action"] == "delete":
                         updated = df.drop(index=selected_row_index).reset_index(drop=True)
                         updated = normalize_dataframe(updated) if not updated.empty else empty_df()
+                        updated = sort_portfolio_df(updated) if not updated.empty else updated
                         st.session_state.df = updated
+                        st.session_state.pop("selected_fee_transaction_index", None)
                         st.toast("Fee record deleted")
                         st.success("Fee record deleted. Download your CSV to keep it.")
                         st.rerun()
@@ -1388,6 +1401,7 @@ with tab3:
                             updated = normalize_dataframe(updated)
                             updated = sort_portfolio_df(updated)
                             st.session_state.df = updated
+                            st.session_state.pop("selected_fee_transaction_index", None)
                             st.toast("Fee record updated")
                             st.success("Fee record updated. Download your CSV to keep it.")
                             st.rerun()
@@ -1403,7 +1417,10 @@ with tab4:
                 uploaded_csv.seek(0)
                 imported = pd.read_csv(uploaded_csv)
                 imported = normalize_dataframe(imported)
+                imported = sort_portfolio_df(imported) if not imported.empty else imported
                 st.session_state.df = imported
+                st.session_state.pop("selected_investment_transaction_index", None)
+                st.session_state.pop("selected_fee_transaction_index", None)
                 st.toast("CSV uploaded")
                 st.success("CSV loaded into this session.")
                 st.rerun()
