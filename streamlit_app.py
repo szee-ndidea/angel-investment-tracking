@@ -1253,7 +1253,7 @@ with tab3:
 
                 result = investment_form(
                     existing_row=selected_row,
-                    form_key="edit_investment_form",
+                    form_key=f"edit_investment_form_{selected_row_index}",
                     is_new=False,
                     existing_companies=existing_investment_companies,
                     require_confirmation=True,
@@ -1361,7 +1361,7 @@ with tab3:
 
                 result = fee_form(
                     existing_row=selected_row,
-                    form_key="edit_fee_form",
+                    form_key=f"edit_fee_form_{selected_row_index}",
                     is_new=False,
                     require_confirmation=True,
                     show_delete=True,
