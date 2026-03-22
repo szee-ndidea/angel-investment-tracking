@@ -5,6 +5,24 @@ import streamlit as st
 
 st.set_page_config(page_title="Angel Investment Tracker", layout="wide")
 
+st.markdown(
+    """
+    <style>
+    div.stButton > button,
+    div[data-testid="stFormSubmitButton"] > button {
+        border-radius: 10px !important;
+        min-height: 42px !important;
+        font-weight: 600 !important;
+    }
+
+    div[data-testid="stFormSubmitButton"] > button[kind="secondary"] {
+        border: 1px solid rgba(220, 38, 38, 0.35) !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 EXPECTED_COLUMNS = [
     "Date",
     "Company",
@@ -657,22 +675,25 @@ def investment_form(
                 key=f"{form_key}_confirm_delete",
             )
 
-        action_left, action_right = st.columns([5, 1])
-
-        with action_left:
-            save_clicked = st.form_submit_button(
-                "Add Transaction" if is_new else "Save Changes",
-                use_container_width=True,
-            )
-
-        with action_right:
-            delete_clicked = False
-            if show_delete:
+        if show_delete:
+            action_left, action_right = st.columns(2)
+            with action_left:
+                save_clicked = st.form_submit_button(
+                    "Save Changes",
+                    use_container_width=True,
+                )
+            with action_right:
                 delete_clicked = st.form_submit_button(
                     "Delete",
                     type="secondary",
                     use_container_width=True,
                 )
+        else:
+            save_clicked = st.form_submit_button(
+                "Add Transaction" if is_new else "Save Changes",
+                use_container_width=True,
+            )
+            delete_clicked = False
 
     if not save_clicked and not delete_clicked:
         return None
@@ -767,22 +788,25 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confi
                 key=f"{form_key}_confirm_delete",
             )
 
-        action_left, action_right = st.columns([5, 1])
-
-        with action_left:
-            save_clicked = st.form_submit_button(
-                "Add Fee Record" if is_new else "Save Fee Changes",
-                use_container_width=True,
-            )
-
-        with action_right:
-            delete_clicked = False
-            if show_delete:
+        if show_delete:
+            action_left, action_right = st.columns(2)
+            with action_left:
+                save_clicked = st.form_submit_button(
+                    "Save Fee Changes",
+                    use_container_width=True,
+                )
+            with action_right:
                 delete_clicked = st.form_submit_button(
                     "Delete",
                     type="secondary",
                     use_container_width=True,
                 )
+        else:
+            save_clicked = st.form_submit_button(
+                "Add Fee Record" if is_new else "Save Fee Changes",
+                use_container_width=True,
+            )
+            delete_clicked = False
 
     if not save_clicked and not delete_clicked:
         return None
