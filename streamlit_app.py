@@ -15,8 +15,28 @@ st.markdown(
         font-weight: 600 !important;
     }
 
+    div[data-testid="stFormSubmitButton"] > button[kind="primary"] {
+        background-color: #15803d !important;
+        border: 1px solid #15803d !important;
+        color: white !important;
+    }
+
+    div[data-testid="stFormSubmitButton"] > button[kind="primary"]:hover {
+        background-color: #166534 !important;
+        border: 1px solid #166534 !important;
+        color: white !important;
+    }
+
     div[data-testid="stFormSubmitButton"] > button[kind="secondary"] {
-        border: 1px solid rgba(220, 38, 38, 0.35) !important;
+        background-color: #dc2626 !important;
+        border: 1px solid #dc2626 !important;
+        color: white !important;
+    }
+
+    div[data-testid="stFormSubmitButton"] > button[kind="secondary"]:hover {
+        background-color: #b91c1c !important;
+        border: 1px solid #b91c1c !important;
+        color: white !important;
     }
     </style>
     """,
@@ -660,19 +680,12 @@ def investment_form(
                     key=f"{form_key}_distributions_edit",
                 )
 
-        confirm_edit = True
-        confirm_delete = True
+        confirm_action = True
 
         if require_confirmation:
-            confirm_edit = st.checkbox(
-                "I reviewed these changes and want to save them.",
-                key=f"{form_key}_confirm_edit",
-            )
-
-        if show_delete:
-            confirm_delete = st.checkbox(
-                "Confirm delete",
-                key=f"{form_key}_confirm_delete",
+            confirm_action = st.checkbox(
+                "I confirm I want to save changes or delete this record.",
+                key=f"{form_key}_confirm_action",
             )
 
         if show_delete:
@@ -680,6 +693,7 @@ def investment_form(
             with action_left:
                 save_clicked = st.form_submit_button(
                     "Save Changes",
+                    type="primary",
                     use_container_width=True,
                 )
             with action_right:
@@ -691,6 +705,7 @@ def investment_form(
         else:
             save_clicked = st.form_submit_button(
                 "Add Transaction" if is_new else "Save Changes",
+                type="primary",
                 use_container_width=True,
             )
             delete_clicked = False
@@ -698,11 +713,8 @@ def investment_form(
     if not save_clicked and not delete_clicked:
         return None
 
-    if save_clicked and require_confirmation and not confirm_edit:
-        return {"action": "validation_error", "message": "Please confirm before saving changes."}
-
-    if delete_clicked and show_delete and not confirm_delete:
-        return {"action": "validation_error", "message": "Please confirm delete before deleting this record."}
+    if (save_clicked or delete_clicked) and require_confirmation and not confirm_action:
+        return {"action": "validation_error", "message": "Please confirm before saving or deleting this record."}
 
     if is_new:
         current_value = gross_investment
@@ -773,19 +785,12 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confi
                 key=f"{form_key}_fee_amount",
             )
 
-        confirm_edit = True
-        confirm_delete = True
+        confirm_action = True
 
         if require_confirmation:
-            confirm_edit = st.checkbox(
-                "I reviewed these changes and want to save them.",
-                key=f"{form_key}_confirm_edit",
-            )
-
-        if show_delete:
-            confirm_delete = st.checkbox(
-                "Confirm delete",
-                key=f"{form_key}_confirm_delete",
+            confirm_action = st.checkbox(
+                "I confirm I want to save changes or delete this record.",
+                key=f"{form_key}_confirm_action",
             )
 
         if show_delete:
@@ -793,6 +798,7 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confi
             with action_left:
                 save_clicked = st.form_submit_button(
                     "Save Fee Changes",
+                    type="primary",
                     use_container_width=True,
                 )
             with action_right:
@@ -804,6 +810,7 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confi
         else:
             save_clicked = st.form_submit_button(
                 "Add Fee Record" if is_new else "Save Fee Changes",
+                type="primary",
                 use_container_width=True,
             )
             delete_clicked = False
@@ -811,11 +818,8 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confi
     if not save_clicked and not delete_clicked:
         return None
 
-    if save_clicked and require_confirmation and not confirm_edit:
-        return {"action": "validation_error", "message": "Please confirm before saving changes."}
-
-    if delete_clicked and show_delete and not confirm_delete:
-        return {"action": "validation_error", "message": "Please confirm delete before deleting this record."}
+    if (save_clicked or delete_clicked) and require_confirmation and not confirm_action:
+        return {"action": "validation_error", "message": "Please confirm before saving or deleting this record."}
 
     created_at = str(existing_row.get("Date Added", "") or "").strip()
     if created_at == "":
