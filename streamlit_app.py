@@ -648,7 +648,7 @@ def investment_form(
                 key=f"{form_key}_confirm_delete",
             )
 
-        action_left, action_right = st.columns([4, 1])
+        action_left, action_right = st.columns([5, 1])
 
         with action_left:
             save_clicked = st.form_submit_button(
@@ -682,8 +682,10 @@ def investment_form(
         created_at = now_timestamp()
 
     updated_at = ""
-    if not is_new:
+    if not is_new and save_clicked:
         updated_at = now_timestamp()
+    elif not is_new:
+        updated_at = str(existing_row.get("Date Updated", "") or "").strip()
 
     out = {
         "Date": pd.to_datetime(date),
@@ -748,7 +750,7 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confi
                 key=f"{form_key}_confirm_delete",
             )
 
-        action_left, action_right = st.columns([4, 1])
+        action_left, action_right = st.columns([5, 1])
 
         with action_left:
             save_clicked = st.form_submit_button(
@@ -775,8 +777,10 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confi
         created_at = now_timestamp()
 
     updated_at = ""
-    if not is_new:
+    if not is_new and save_clicked:
         updated_at = now_timestamp()
+    elif not is_new:
+        updated_at = str(existing_row.get("Date Updated", "") or "").strip()
 
     out = {
         "Date": pd.to_datetime(date),
