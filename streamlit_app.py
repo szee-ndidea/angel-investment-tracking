@@ -291,19 +291,6 @@ def value_basis_series(df: pd.DataFrame, metric_view: str) -> pd.Series:
     return df["Current Value"].fillna(0.0) + df["Distributions"].fillna(0.0)
 
 
-def add_calculated_fields(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df.copy()
-
-    out = df.copy()
-    out["Total Paid"] = out["Gross Investment"] + out["Fees"]
-    out["Total Value"] = out["Current Value"] + out["Distributions"]
-    out["Gain / Loss"] = out["Total Value"] - out["Total Paid"]
-    out["MOIC"] = out["Total Value"] / out["Gross Investment"].replace(0, pd.NA)
-    out["TVPI"] = out["Total Value"] / out["Total Paid"].replace(0, pd.NA)
-    return out
-
-
 def portfolio_metrics(df: pd.DataFrame, metric_view: str = "Total") -> dict:
     if df.empty:
         return {
@@ -327,7 +314,7 @@ def portfolio_metrics(df: pd.DataFrame, metric_view: str = "Total") -> dict:
     distributions = invest_df["Distributions"].fillna(0).sum()
     total_value = current_value + distributions
     display_value = value_basis_series(invest_df, metric_view).sum()
-    gain_loss = display_value - total_paid
+    gain_loss = total_value - total_paid
     positions = invest_df["Company"].replace("", pd.NA).dropna().nunique()
     moic = display_value / gross_investment if gross_investment != 0 else pd.NA
     tvpi = display_value / total_paid if total_paid != 0 else pd.NA
@@ -371,11 +358,17 @@ def company_summary(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
 
-    summary["total_paid"] = summary["gross_investment"] + summary["fees"]
-    summary["total_value"] = summary["current_value"] + summary["distributions"]
-    summary["gain_loss"] = summary["total_value"] - summary["total_paid"]
-    summary["moic"] = summary["total_value"] / summary["gross_investment"].replace(0, pd.NA)
-    summary["tvpi"] = summary["total_value"] / summary["total_paid"].replace(0, pd.NA)
+    summary["gain_loss"] = (
+        summary["current_value"] + summary["distributions"] - summary["gross_investment"] - summary["fees"]
+    )
+    summary["moic"] = (
+        (summary["current_value"] + summary["distributions"])
+        / summary["gross_investment"].replace(0, pd.NA)
+    )
+    summary["tvpi"] = (
+        (summary["current_value"] + summary["distributions"])
+        / (summary["gross_investment"] + summary["fees"]).replace(0, pd.NA)
+    )
 
     summary = summary.sort_values(["gross_investment", "Company"], ascending=[False, True])
     return summary
@@ -443,27 +436,40 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
     yearly["deal_count"] = yearly["deal_count"].fillna(0).astype(int)
 
     yearly["fees"] = yearly["fees_on_investments"] + yearly["fees_only"]
-    yearly["total_paid"] = yearly["gross_investment"] + yearly["fees"]
-    yearly["total_value"] = yearly["current_value"] + yearly["distributions"]
-    yearly["gain_loss"] = yearly["total_value"] - yearly["total_paid"]
-    yearly["moic"] = yearly["total_value"] / yearly["gross_investment"].replace(0, pd.NA)
-    yearly["tvpi"] = yearly["total_value"] / yearly["total_paid"].replace(0, pd.NA)
+    yearly["gain_loss"] = (
+        yearly["current_value"] + yearly["distributions"] - yearly["gross_investment"] - yearly["fees"]
+    )
+    yearly["moic"] = (
+        (yearly["current_value"] + yearly["distributions"])
+        / yearly["gross_investment"].replace(0, pd.NA)
+    )
+    yearly["tvpi"] = (
+        (yearly["current_value"] + yearly["distributions"])
+        / (yearly["gross_investment"] + yearly["fees"]).replace(0, pd.NA)
+    )
 
     return yearly[
         [
             "Year",
             "gross_investment",
             "fees",
-            "total_paid",
             "current_value",
             "distributions",
-            "total_value",
             "gain_loss",
             "deal_count",
             "moic",
             "tvpi",
         ]
     ]
+
+
+def get_existing_investment_companies() -> list[str]:
+    if "df" not in st.session_state or st.session_state.df.empty:
+        return []
+
+    temp_df = normalize_dataframe(st.session_state.df)
+    temp_df = investment_only_df(temp_df)
+    return sorted([c for c in temp_df["Company"].dropna().unique().tolist() if c != ""])
 
 
 def investment_form(existing_row=None, form_key="investment_form", is_new=False):
@@ -481,34 +487,44 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
         existing_instrument = "SAFE"
 
     existing_status = canonicalize_status(existing_row.get("Status", "Active"))
-
     existing_company = existing_row.get("Company", "") or ""
     existing_round_stage = existing_row.get("Round/Stage", "") or ""
     existing_source = existing_row.get("Source of Deal", "") or ""
-
-    existing_companies = []
-    if "df" in st.session_state and not st.session_state.df.empty:
-        temp_df = normalize_dataframe(st.session_state.df)
-        existing_companies = sorted([c for c in temp_df["Company"].dropna().unique().tolist() if c != ""])
+    existing_companies = get_existing_investment_companies()
 
     with st.form(form_key, clear_on_submit=False):
+        if is_new:
+            follow_on_col, _ = st.columns([1, 3])
+            with follow_on_col:
+                is_follow_on = st.checkbox(
+                    "Follow-on investment",
+                    value=(existing_company in existing_companies and existing_company != ""),
+                    help="Creates a new transaction row using an existing portfolio company name.",
+                    key=f"{form_key}_is_follow_on",
+                )
+        else:
+            is_follow_on = False
+
         top1, top2, top3 = st.columns(3)
         with top1:
             date = st.date_input("Date", value=existing_date)
         with top2:
-            is_follow_on = st.checkbox(
-                "This is a follow-on investment",
-                value=(is_new and existing_company in existing_companies and existing_company != ""),
-                help="Use this when adding another check into an existing portfolio company.",
-                key=f"{form_key}_is_follow_on",
-            )
-        with top3:
             investment_instruments = [x for x in INSTRUMENT_OPTIONS if x != "Fee"]
             instrument_type = st.selectbox(
                 "Instrument Type",
                 options=investment_instruments,
                 index=investment_instruments.index(existing_instrument),
             )
+        with top3:
+            if not is_new:
+                status = st.selectbox(
+                    "Status",
+                    options=STATUS_OPTIONS,
+                    index=STATUS_OPTIONS.index(existing_status),
+                )
+            else:
+                status = "Active"
+                st.text_input("Status", value="Active", disabled=True)
 
         if is_follow_on and existing_companies:
             selected_default = existing_company if existing_company in existing_companies else existing_companies[0]
@@ -516,7 +532,7 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
                 "Company",
                 options=existing_companies,
                 index=existing_companies.index(selected_default),
-                help="Selecting an existing company keeps the company name consistent for portfolio counts and summaries.",
+                help="Select an existing company to keep naming clean for portfolio counts and summaries.",
                 key=f"{form_key}_company_follow_on",
             )
         else:
@@ -559,18 +575,6 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
         with bot2:
             source_of_deal = st.text_input("Source of Deal", value=existing_source)
 
-        val1, val2, val3 = st.columns(3)
-        with val3:
-            if not is_new:
-                status = st.selectbox(
-                    "Status",
-                    options=STATUS_OPTIONS,
-                    index=STATUS_OPTIONS.index(existing_status),
-                )
-            else:
-                status = "Active"
-                st.text_input("Status", value="Active", disabled=True)
-
         disable_current_value = (not is_new) and (status in ZERO_CURRENT_VALUE_STATUSES)
         current_value_help = (
             "Automatically reset to zero for Exited, Partial Realized, Written Off, and Closed."
@@ -578,6 +582,7 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
             else "Unrealized residual value still held."
         )
 
+        val1, val2 = st.columns(2)
         with val1:
             if is_new:
                 current_value = money_input(
@@ -690,7 +695,41 @@ def build_record_label(row) -> str:
     return f"{date_str} | {company} | {instrument} | Gross {gross} | Dist {distributions}"
 
 
-st.title("Angel Investment Tracker")
+title_col, help_col = st.columns([20, 1])
+with title_col:
+    st.title("Angel Investment Tracker")
+with help_col:
+    with st.popover("?"):
+        st.markdown(
+            """
+            This app does not save data on the server.
+
+            Your CSV file is the only source of truth.
+
+            How to use it:
+            1. Upload your current CSV in the Upload / Download tab.
+            2. Add or edit transactions during your session.
+            3. Download the updated CSV before leaving.
+
+            Notes:
+            Use the Investment form for company investments.
+            Use the follow-on option when adding another check into an existing company.
+            Use the Organization Fee form for fees such as Irish Angels.
+            Organization fees are stored in the same CSV, but handled separately in the UI.
+            Gross Investment is your actual investment into the company.
+            Fees are separate deal costs.
+            Current Value is unrealized residual value.
+            Distributions are realized cash back from the company.
+            Total value logic is Current Value + Distributions.
+            MOIC = selected value basis / Gross Investment
+            TVPI = selected value basis / (Gross Investment + Fees)
+            For Exited and Partial Realized, Current Value is reset to zero and value comes from Distributions.
+            For Written Off and Closed, Current Value is reset to zero.
+            Older statuses such as Converted, Paused, and Other are normalized into Closed.
+            For SAFE or Convertible Note deals, use the cap as valuation when there is one.
+            If there is no cap, leave valuation blank.
+            """
+        )
 
 if "df" not in st.session_state:
     st.session_state.df = empty_df()
@@ -700,38 +739,6 @@ if "overview_metric_view" not in st.session_state:
 
 df = normalize_dataframe(st.session_state.df) if not st.session_state.df.empty else empty_df()
 st.session_state.df = df
-
-with st.sidebar:
-    st.header("Instructions")
-    st.markdown(
-        """
-        This app does not save data on the server.
-
-        Your CSV file is the only source of truth.
-
-        How to use it:
-        1. Upload your current CSV in the Upload / Download tab.
-        2. Add or edit transactions during your session.
-        3. Download the updated CSV before leaving.
-
-        Notes:
-        Use the Investment form for company investments.
-        Use the follow-on checkbox when adding another check into an existing company.
-        Use the Organization Fee form for fees such as Irish Angels.
-        Organization fees are stored in the same CSV, but handled separately in the UI.
-        Gross Investment is your actual investment into the company.
-        Fees are separate deal costs.
-        Current Value is unrealized residual value.
-        Distributions are realized cash back from the company.
-        Total Value = Current Value + Distributions
-        MOIC = selected value basis / Gross Investment
-        TVPI = selected value basis / (Gross Investment + Fees)
-        For Exited and Partial Realized, Current Value is reset to zero and value comes from Distributions.
-        For Written Off and Closed, Current Value is reset to zero.
-        For SAFE or Convertible Note deals, use the cap as valuation when there is one.
-        If there is no cap, leave valuation blank.
-        """
-    )
 
 tab1, tab2, tab3, tab4 = st.tabs(
     ["Overview", "Add Investment", "Edit Investments", "Upload / Download"]
@@ -757,18 +764,11 @@ with tab1:
     }
     display_value_label = view_label_map.get(metric_view, "Value")
 
-    gain_loss_label_map = {
-        "Total": "Total Gain / Loss",
-        "Realized": "Realized Gain / Loss",
-        "Unrealized": "Unrealized Gain / Loss",
-    }
-    gain_loss_label = gain_loss_label_map.get(metric_view, "Gain / Loss")
-
     r1c1, r1c2, r1c3, r1c4 = st.columns(4)
     r1c1.metric("Gross Investment", format_currency_blank(metrics["gross_investment"]))
     r1c2.metric("Fees", format_currency_blank(metrics["fees"]))
     r1c3.metric(display_value_label, format_currency_blank(metrics["display_value"]))
-    r1c4.metric(gain_loss_label, format_currency_blank(metrics["gain_loss"]))
+    r1c4.metric("Total Gain / Loss", format_currency_blank(metrics["gain_loss"]))
 
     r2c1, r2c2, r2c3, r2c4 = st.columns(4)
     r2c1.metric("Distributions", format_currency_blank(metrics["distributions"]))
@@ -783,10 +783,8 @@ with tab1:
         for col in [
             "gross_investment",
             "fees",
-            "total_paid",
             "current_value",
             "distributions",
-            "total_value",
             "gain_loss",
         ]:
             display_yearly[col] = display_yearly[col].map(format_currency)
@@ -797,10 +795,8 @@ with tab1:
             columns={
                 "gross_investment": "Gross Investment",
                 "fees": "Fees",
-                "total_paid": "Total Paid",
                 "current_value": "Current Value",
                 "distributions": "Distributions",
-                "total_value": "Total Value",
                 "gain_loss": "Gain / Loss",
                 "deal_count": "Investment Deals",
                 "moic": "MOIC",
@@ -821,10 +817,8 @@ with tab1:
         for col in [
             "gross_investment",
             "fees",
-            "total_paid",
             "current_value",
             "distributions",
-            "total_value",
             "gain_loss",
             "latest_valuation_cap",
         ]:
@@ -837,10 +831,8 @@ with tab1:
                 "deals": "Deals",
                 "gross_investment": "Gross Investment",
                 "fees": "Fees",
-                "total_paid": "Total Paid",
                 "current_value": "Current Value",
                 "distributions": "Distributions",
-                "total_value": "Total Value",
                 "gain_loss": "Gain / Loss",
                 "moic": "MOIC",
                 "tvpi": "TVPI",
@@ -889,7 +881,7 @@ with tab2:
             else:
                 updated = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                 updated = normalize_dataframe(updated)
-                updated = updated.sort_values(["Date", "Company"], na_position="last").reset_index(drop=True)
+                updated = updated.sort_values(["Date", "Company"], ascending=[False, True], na_position="last").reset_index(drop=True)
                 st.session_state.df = updated
                 st.toast("Investment added")
                 st.success("Investment added. Download your CSV to keep it.")
@@ -904,7 +896,7 @@ with tab2:
             else:
                 updated = pd.concat([df, pd.DataFrame([new_fee_row])], ignore_index=True)
                 updated = normalize_dataframe(updated)
-                updated = updated.sort_values(["Date", "Company"], na_position="last").reset_index(drop=True)
+                updated = updated.sort_values(["Date", "Company"], ascending=[False, True], na_position="last").reset_index(drop=True)
                 st.session_state.df = updated
                 st.toast("Fee record added")
                 st.success("Fee record added. Download your CSV to keep it.")
@@ -950,6 +942,8 @@ with tab3:
                 st.info("No investment transactions match your filters.")
             else:
                 filtered = filtered.copy().reset_index()
+                filtered["Date_Sort"] = pd.to_datetime(filtered["Date"], errors="coerce")
+                filtered = filtered.sort_values(["Date_Sort", "Company"], ascending=[False, True]).drop(columns=["Date_Sort"])
                 filtered["label"] = filtered.apply(build_record_label, axis=1)
 
                 c1, c2 = st.columns([1, 1])
@@ -1004,7 +998,7 @@ with tab3:
                         for key, value in edited_row.items():
                             updated.at[selected_row_index, key] = value
                         updated = normalize_dataframe(updated)
-                        updated = updated.sort_values(["Date", "Company"], na_position="last").reset_index(drop=True)
+                        updated = updated.sort_values(["Date", "Company"], ascending=[False, True], na_position="last").reset_index(drop=True)
                         st.session_state.df = updated
                         st.toast("Investment updated")
                         st.success("Investment updated. Download your CSV to keep it.")
@@ -1063,6 +1057,8 @@ with tab3:
                 st.info("No fee records match your filters.")
             else:
                 filtered = filtered.copy().reset_index()
+                filtered["Date_Sort"] = pd.to_datetime(filtered["Date"], errors="coerce")
+                filtered = filtered.sort_values(["Date_Sort", "Company"], ascending=[False, True]).drop(columns=["Date_Sort"])
                 filtered["label"] = filtered.apply(build_record_label, axis=1)
 
                 c1, c2 = st.columns([1, 1])
@@ -1105,7 +1101,7 @@ with tab3:
                         for key, value in edited_fee_row.items():
                             updated.at[selected_row_index, key] = value
                         updated = normalize_dataframe(updated)
-                        updated = updated.sort_values(["Date", "Company"], na_position="last").reset_index(drop=True)
+                        updated = updated.sort_values(["Date", "Company"], ascending=[False, True], na_position="last").reset_index(drop=True)
                         st.session_state.df = updated
                         st.toast("Fee record updated")
                         st.success("Fee record updated. Download your CSV to keep it.")
