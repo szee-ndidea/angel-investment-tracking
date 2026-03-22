@@ -42,6 +42,34 @@ st.markdown(
         border: 1px solid #b91c1c !important;
         color: white !important;
     }
+
+    div.stButton > button[kind*="primary"],
+    div.stButton > button[data-testid*="primary"] {
+        background-color: #16a34a !important;
+        border: 1px solid #16a34a !important;
+        color: white !important;
+    }
+
+    div.stButton > button[kind*="primary"]:hover,
+    div.stButton > button[data-testid*="primary"]:hover {
+        background-color: #15803d !important;
+        border: 1px solid #15803d !important;
+        color: white !important;
+    }
+
+    div.stButton > button[kind*="secondary"],
+    div.stButton > button[data-testid*="secondary"] {
+        background-color: #dc2626 !important;
+        border: 1px solid #dc2626 !important;
+        color: white !important;
+    }
+
+    div.stButton > button[kind*="secondary"]:hover,
+    div.stButton > button[data-testid*="secondary"]:hover {
+        background-color: #b91c1c !important;
+        border: 1px solid #b91c1c !important;
+        color: white !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
