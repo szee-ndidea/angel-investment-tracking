@@ -27,6 +27,8 @@ STATUS_OPTIONS = [
     "Closed",
 ]
 
+ZERO_CURRENT_VALUE_STATUSES = {"Exited", "Partial Realized", "Written Off", "Closed"}
+
 INSTRUMENT_OPTIONS = [
     "SAFE",
     "Convertible Note",
@@ -147,10 +149,7 @@ def apply_status_value_rules(df: pd.DataFrame) -> pd.DataFrame:
     out.loc[fee_mask, "Source of Deal"] = ""
     out.loc[fee_mask, "Status"] = "Active"
 
-    exited_like_mask = out["Status"].isin(["Exited", "Partial Realized"])
-    out.loc[exited_like_mask, "Current Value"] = 0.0
-
-    zero_value_mask = out["Status"].isin(["Written Off", "Closed"])
+    zero_value_mask = out["Status"].isin(list(ZERO_CURRENT_VALUE_STATUSES))
     out.loc[zero_value_mask, "Current Value"] = 0.0
 
     return out
@@ -328,7 +327,7 @@ def portfolio_metrics(df: pd.DataFrame, metric_view: str = "Total") -> dict:
     distributions = invest_df["Distributions"].fillna(0).sum()
     total_value = current_value + distributions
     display_value = value_basis_series(invest_df, metric_view).sum()
-    gain_loss = total_value - total_paid
+    gain_loss = display_value - total_paid
     positions = invest_df["Company"].replace("", pd.NA).dropna().nunique()
     moic = display_value / gross_investment if gross_investment != 0 else pd.NA
     tvpi = display_value / total_paid if total_paid != 0 else pd.NA
@@ -561,6 +560,24 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
             source_of_deal = st.text_input("Source of Deal", value=existing_source)
 
         val1, val2, val3 = st.columns(3)
+        with val3:
+            if not is_new:
+                status = st.selectbox(
+                    "Status",
+                    options=STATUS_OPTIONS,
+                    index=STATUS_OPTIONS.index(existing_status),
+                )
+            else:
+                status = "Active"
+                st.text_input("Status", value="Active", disabled=True)
+
+        disable_current_value = (not is_new) and (status in ZERO_CURRENT_VALUE_STATUSES)
+        current_value_help = (
+            "Automatically reset to zero for Exited, Partial Realized, Written Off, and Closed."
+            if disable_current_value
+            else "Unrealized residual value still held."
+        )
+
         with val1:
             if is_new:
                 current_value = money_input(
@@ -574,7 +591,8 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
                 current_value = money_input(
                     "Current Value ($)",
                     existing_row.get("Current Value", 0.0),
-                    help_text="Ignored and reset to zero for Exited, Partial Realized, Written Off, and Closed.",
+                    help_text=current_value_help,
+                    disabled=disable_current_value,
                     key=f"{form_key}_current_value_edit",
                 )
         with val2:
@@ -584,16 +602,6 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
                 help_text="Cash returned from the company, for example on a partial or full exit.",
                 key=f"{form_key}_distributions",
             )
-        with val3:
-            if not is_new:
-                status = st.selectbox(
-                    "Status",
-                    options=STATUS_OPTIONS,
-                    index=STATUS_OPTIONS.index(existing_status),
-                )
-            else:
-                status = "Active"
-                st.text_input("Status", value="Active", disabled=True)
 
         submitted = st.form_submit_button("Add Transaction" if is_new else "Save Changes")
 
@@ -749,11 +757,18 @@ with tab1:
     }
     display_value_label = view_label_map.get(metric_view, "Value")
 
+    gain_loss_label_map = {
+        "Total": "Total Gain / Loss",
+        "Realized": "Realized Gain / Loss",
+        "Unrealized": "Unrealized Gain / Loss",
+    }
+    gain_loss_label = gain_loss_label_map.get(metric_view, "Gain / Loss")
+
     r1c1, r1c2, r1c3, r1c4 = st.columns(4)
     r1c1.metric("Gross Investment", format_currency_blank(metrics["gross_investment"]))
     r1c2.metric("Fees", format_currency_blank(metrics["fees"]))
     r1c3.metric(display_value_label, format_currency_blank(metrics["display_value"]))
-    r1c4.metric("Total Gain / Loss", format_currency_blank(metrics["gain_loss"]))
+    r1c4.metric(gain_loss_label, format_currency_blank(metrics["gain_loss"]))
 
     r2c1, r2c2, r2c3, r2c4 = st.columns(4)
     r2c1.metric("Distributions", format_currency_blank(metrics["distributions"]))
