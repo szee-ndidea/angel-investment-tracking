@@ -521,6 +521,7 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
                     "Status",
                     options=STATUS_OPTIONS,
                     index=STATUS_OPTIONS.index(existing_status),
+                    key=f"{form_key}_status",
                 )
             else:
                 status = "Active"
@@ -576,6 +577,7 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
             source_of_deal = st.text_input("Source of Deal", value=existing_source)
 
         disable_current_value = (not is_new) and (status in ZERO_CURRENT_VALUE_STATUSES)
+        current_value_display = 0.0 if disable_current_value else existing_row.get("Current Value", 0.0)
         current_value_help = (
             "Automatically reset to zero for Exited, Partial Realized, Written Off, and Closed."
             if disable_current_value
@@ -595,18 +597,27 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
             else:
                 current_value = money_input(
                     "Current Value ($)",
-                    existing_row.get("Current Value", 0.0),
+                    current_value_display,
                     help_text=current_value_help,
                     disabled=disable_current_value,
                     key=f"{form_key}_current_value_edit",
                 )
         with val2:
-            distributions = money_input(
-                "Distributions ($)",
-                existing_row.get("Distributions", 0.0),
-                help_text="Cash returned from the company, for example on a partial or full exit.",
-                key=f"{form_key}_distributions",
-            )
+            if is_new:
+                distributions = money_input(
+                    "Distributions ($)",
+                    0.0,
+                    help_text="Not used when adding a new investment transaction.",
+                    disabled=True,
+                    key=f"{form_key}_distributions_new",
+                )
+            else:
+                distributions = money_input(
+                    "Distributions ($)",
+                    existing_row.get("Distributions", 0.0),
+                    help_text="Cash returned from the company, for example on a partial or full exit.",
+                    key=f"{form_key}_distributions_edit",
+                )
 
         submitted = st.form_submit_button("Add Transaction" if is_new else "Save Changes")
 
@@ -615,6 +626,10 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
 
     if is_new:
         current_value = gross_investment
+        distributions = 0.0
+
+    if status in ZERO_CURRENT_VALUE_STATUSES:
+        current_value = 0.0
 
     out = {
         "Date": pd.to_datetime(date),
