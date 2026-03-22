@@ -539,13 +539,14 @@ def investment_form(
 
         top1, top2 = st.columns(2)
         with top1:
-            date = st.date_input("Date", value=existing_date)
+            date = st.date_input("Date", value=existing_date, key=f"{form_key}_date")
         with top2:
             investment_instruments = [x for x in INSTRUMENT_OPTIONS if x != "Fee"]
             instrument_type = st.selectbox(
                 "Instrument Type",
                 options=investment_instruments,
                 index=investment_instruments.index(existing_instrument),
+                key=f"{form_key}_instrument_type",
             )
 
         mid1, mid2, mid3 = st.columns(3)
@@ -563,7 +564,11 @@ def investment_form(
                 key=f"{form_key}_fees",
             )
         with mid3:
-            round_stage = st.text_input("Round / Stage", value=existing_round_stage)
+            round_stage = st.text_input(
+                "Round / Stage",
+                value=existing_round_stage,
+                key=f"{form_key}_round_stage",
+            )
 
         if instrument_type in ["SAFE", "Convertible Note"]:
             valuation_help = "For SAFE or convertible note deals, use the cap here when there is one. If there is no cap, leave this blank."
@@ -579,7 +584,11 @@ def investment_form(
                 key=f"{form_key}_valuation_cap",
             )
         with bot2:
-            source_of_deal = st.text_input("Source of Deal", value=existing_source)
+            source_of_deal = st.text_input(
+                "Source of Deal",
+                value=existing_source,
+                key=f"{form_key}_source_of_deal",
+            )
 
         if is_new:
             status = "Active"
@@ -653,7 +662,6 @@ def investment_form(
         with action_left:
             save_clicked = st.form_submit_button(
                 "Add Transaction" if is_new else "Save Changes",
-                disabled=not confirm_edit,
                 use_container_width=True,
             )
 
@@ -663,12 +671,17 @@ def investment_form(
                 delete_clicked = st.form_submit_button(
                     "Delete",
                     type="secondary",
-                    disabled=not confirm_delete,
                     use_container_width=True,
                 )
 
     if not save_clicked and not delete_clicked:
         return None
+
+    if save_clicked and require_confirmation and not confirm_edit:
+        return {"action": "validation_error", "message": "Please confirm before saving changes."}
+
+    if delete_clicked and show_delete and not confirm_delete:
+        return {"action": "validation_error", "message": "Please confirm delete before deleting this record."}
 
     if is_new:
         current_value = gross_investment
@@ -725,9 +738,13 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confi
     with st.form(form_key, clear_on_submit=is_new):
         top1, top2, top3 = st.columns(3)
         with top1:
-            date = st.date_input("Date", value=existing_date)
+            date = st.date_input("Date", value=existing_date, key=f"{form_key}_date")
         with top2:
-            organization = st.text_input("Organization", value=existing_row.get("Company", "") or "")
+            organization = st.text_input(
+                "Organization",
+                value=existing_row.get("Company", "") or "",
+                key=f"{form_key}_organization",
+            )
         with top3:
             fee_amount = money_input(
                 "Fee Amount ($)",
@@ -755,7 +772,6 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confi
         with action_left:
             save_clicked = st.form_submit_button(
                 "Add Fee Record" if is_new else "Save Fee Changes",
-                disabled=not confirm_edit,
                 use_container_width=True,
             )
 
@@ -765,12 +781,17 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confi
                 delete_clicked = st.form_submit_button(
                     "Delete",
                     type="secondary",
-                    disabled=not confirm_delete,
                     use_container_width=True,
                 )
 
     if not save_clicked and not delete_clicked:
         return None
+
+    if save_clicked and require_confirmation and not confirm_edit:
+        return {"action": "validation_error", "message": "Please confirm before saving changes."}
+
+    if delete_clicked and show_delete and not confirm_delete:
+        return {"action": "validation_error", "message": "Please confirm delete before deleting this record."}
 
     created_at = str(existing_row.get("Date Added", "") or "").strip()
     if created_at == "":
@@ -1054,20 +1075,23 @@ with tab2:
             company_mode="new",
             show_delete=False,
         )
-        if result is not None and result["action"] == "save":
-            new_row = result["row"]
-            if not new_row["Company"]:
-                st.error("Company is required.")
-            else:
-                add_row_and_refresh(
-                    df,
-                    new_row,
-                    toast_message="Investment added",
-                    success_message=(
-                        f"Added new investment for {new_row['Company']} with Status = Active, Current Value = "
-                        f"{format_currency_blank(new_row['Current Value'])}, and Distributions = $0."
-                    ),
-                )
+        if result is not None:
+            if result["action"] == "validation_error":
+                st.error(result["message"])
+            elif result["action"] == "save":
+                new_row = result["row"]
+                if not new_row["Company"]:
+                    st.error("Company is required.")
+                else:
+                    add_row_and_refresh(
+                        df,
+                        new_row,
+                        toast_message="Investment added",
+                        success_message=(
+                            f"Added new investment for {new_row['Company']} with Status = Active, Current Value = "
+                            f"{format_currency_blank(new_row['Current Value'])}, and Distributions = $0."
+                        ),
+                    )
 
     with add_follow_on_tab:
         if not existing_investment_companies:
@@ -1080,34 +1104,40 @@ with tab2:
                 company_mode="follow_on",
                 show_delete=False,
             )
-            if result is not None and result["action"] == "save":
-                follow_on_row = result["row"]
-                if not follow_on_row["Company"]:
-                    st.error("Existing Company is required.")
-                else:
-                    add_row_and_refresh(
-                        df,
-                        follow_on_row,
-                        toast_message="Follow-on added",
-                        success_message=(
-                            f"Added follow-on investment for {follow_on_row['Company']} with Status = Active, Current Value = "
-                            f"{format_currency_blank(follow_on_row['Current Value'])}, and Distributions = $0."
-                        ),
-                    )
+            if result is not None:
+                if result["action"] == "validation_error":
+                    st.error(result["message"])
+                elif result["action"] == "save":
+                    follow_on_row = result["row"]
+                    if not follow_on_row["Company"]:
+                        st.error("Existing Company is required.")
+                    else:
+                        add_row_and_refresh(
+                            df,
+                            follow_on_row,
+                            toast_message="Follow-on added",
+                            success_message=(
+                                f"Added follow-on investment for {follow_on_row['Company']} with Status = Active, Current Value = "
+                                f"{format_currency_blank(follow_on_row['Current Value'])}, and Distributions = $0."
+                            ),
+                        )
 
     with add_fee_tab:
         result = fee_form(form_key="new_fee_form", is_new=True, show_delete=False)
-        if result is not None and result["action"] == "save":
-            new_fee_row = result["row"]
-            if not new_fee_row["Company"]:
-                st.error("Organization is required.")
-            else:
-                add_row_and_refresh(
-                    df,
-                    new_fee_row,
-                    toast_message="Fee record added",
-                    success_message="Fee record added. Download your CSV to keep it.",
-                )
+        if result is not None:
+            if result["action"] == "validation_error":
+                st.error(result["message"])
+            elif result["action"] == "save":
+                new_fee_row = result["row"]
+                if not new_fee_row["Company"]:
+                    st.error("Organization is required.")
+                else:
+                    add_row_and_refresh(
+                        df,
+                        new_fee_row,
+                        toast_message="Fee record added",
+                        success_message="Fee record added. Download your CSV to keep it.",
+                    )
 
 with tab3:
     st.subheader("Edit Transactions")
@@ -1202,7 +1232,9 @@ with tab3:
                 )
 
                 if result is not None:
-                    if result["action"] == "delete":
+                    if result["action"] == "validation_error":
+                        st.error(result["message"])
+                    elif result["action"] == "delete":
                         updated = df.drop(index=selected_row_index).reset_index(drop=True)
                         updated = normalize_dataframe(updated) if not updated.empty else empty_df()
                         st.session_state.df = updated
@@ -1306,7 +1338,9 @@ with tab3:
                 )
 
                 if result is not None:
-                    if result["action"] == "delete":
+                    if result["action"] == "validation_error":
+                        st.error(result["message"])
+                    elif result["action"] == "delete":
                         updated = df.drop(index=selected_row_index).reset_index(drop=True)
                         updated = normalize_dataframe(updated) if not updated.empty else empty_df()
                         st.session_state.df = updated
