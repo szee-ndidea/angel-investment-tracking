@@ -471,6 +471,7 @@ def investment_form(
     is_new=False,
     existing_companies=None,
     company_mode="new",
+    require_confirmation=False,
 ):
     if existing_row is None:
         existing_row = {}
@@ -617,7 +618,17 @@ def investment_form(
                     key=f"{form_key}_distributions_edit",
                 )
 
-        submitted = st.form_submit_button("Add Transaction" if is_new else "Save Changes")
+        confirm_edit = True
+        if require_confirmation:
+            confirm_edit = st.checkbox(
+                "I reviewed these changes and want to save them.",
+                key=f"{form_key}_confirm_edit",
+            )
+
+        submitted = st.form_submit_button(
+            "Add Transaction" if is_new else "Save Changes",
+            disabled=not confirm_edit,
+        )
 
     if not submitted:
         return None
@@ -649,7 +660,7 @@ def investment_form(
     return out_df.iloc[0].to_dict()
 
 
-def fee_form(existing_row=None, form_key="fee_form", is_new=False):
+def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confirmation=False):
     if existing_row is None:
         existing_row = {}
 
@@ -672,7 +683,17 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False):
                 key=f"{form_key}_fee_amount",
             )
 
-        submitted = st.form_submit_button("Add Fee Record" if is_new else "Save Fee Changes")
+        confirm_edit = True
+        if require_confirmation:
+            confirm_edit = st.checkbox(
+                "I reviewed these changes and want to save them.",
+                key=f"{form_key}_confirm_edit",
+            )
+
+        submitted = st.form_submit_button(
+            "Add Fee Record" if is_new else "Save Fee Changes",
+            disabled=not confirm_edit,
+        )
 
     if not submitted:
         return None
@@ -728,6 +749,39 @@ def add_row_and_refresh(df: pd.DataFrame, new_row: dict, toast_message: str, suc
     st.rerun()
 
 
+def build_edit_selection_table(filtered_df: pd.DataFrame, is_fee: bool = False) -> pd.DataFrame:
+    temp = filtered_df.copy().reset_index()
+    temp["Date"] = pd.to_datetime(temp["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+    if is_fee:
+        display = temp[["index", "Date", "Company", "Fees"]].copy()
+        display["Fees"] = display["Fees"].map(format_currency_blank)
+        display = display.rename(
+            columns={
+                "index": "Row ID",
+                "Company": "Organization",
+                "Fees": "Fee Amount",
+            }
+        )
+    else:
+        display = temp[
+            ["index", "Date", "Company", "Instrument Type", "Gross Investment", "Fees", "Current Value", "Distributions", "Status"]
+        ].copy()
+        for col in ["Gross Investment", "Fees", "Current Value", "Distributions"]:
+            display[col] = display[col].map(format_currency_blank)
+        display = display.rename(
+            columns={
+                "index": "Row ID",
+                "Gross Investment": "Gross Investment",
+                "Fees": "Fees",
+                "Current Value": "Current Value",
+                "Distributions": "Distributions",
+            }
+        )
+
+    return display
+
+
 title_col, help_col = st.columns([20, 1])
 with title_col:
     st.title("Angel Investment Tracker")
@@ -778,7 +832,7 @@ existing_investment_companies = sorted(
 )
 
 tab1, tab2, tab3, tab4 = st.tabs(
-    ["Overview", "Add Investment", "Edit Investments", "Upload / Download"]
+    ["Overview", "Add Transaction", "Edit Transaction", "Upload / Download"]
 )
 
 with tab1:
@@ -1007,23 +1061,22 @@ with tab3:
             if filtered.empty:
                 st.info("No investment transactions match your filters.")
             else:
-                filtered = filtered.copy().reset_index()
+                filtered = filtered.copy()
                 filtered["Date_Sort"] = pd.to_datetime(filtered["Date"], errors="coerce")
                 filtered = filtered.sort_values(["Date_Sort", "Company"], ascending=[False, True]).drop(columns=["Date_Sort"])
-                filtered["label"] = filtered.apply(build_record_label, axis=1)
 
-                c1, c2 = st.columns([1, 1])
-                with c1:
-                    st.metric("Matching Investments", f"{len(filtered):,}")
-                with c2:
-                    st.metric("Total Investments", f"{len(investment_df):,}")
+                selection_table = build_edit_selection_table(filtered, is_fee=False)
+                st.dataframe(selection_table, use_container_width=True, hide_index=True)
 
-                selected_label = st.selectbox(
-                    "Investment Transaction to Edit",
-                    filtered["label"].tolist(),
-                    key="selected_investment_label",
+                selected_row_index = st.number_input(
+                    "Row ID to edit",
+                    min_value=int(selection_table["Row ID"].min()),
+                    max_value=int(selection_table["Row ID"].max()),
+                    value=int(selection_table["Row ID"].iloc[0]),
+                    step=1,
+                    key="selected_investment_row_id",
                 )
-                selected_row_index = filtered.loc[filtered["label"] == selected_label, "index"].iloc[0]
+
                 selected_row = df.loc[selected_row_index].to_dict()
 
                 selected_date = pd.to_datetime(selected_row.get("Date"), errors="coerce")
@@ -1059,6 +1112,7 @@ with tab3:
                     form_key="edit_investment_form",
                     is_new=False,
                     existing_companies=existing_investment_companies,
+                    require_confirmation=True,
                 )
 
                 if edited_row is not None:
@@ -1138,23 +1192,22 @@ with tab3:
             if filtered.empty:
                 st.info("No fee records match your filters.")
             else:
-                filtered = filtered.copy().reset_index()
+                filtered = filtered.copy()
                 filtered["Date_Sort"] = pd.to_datetime(filtered["Date"], errors="coerce")
                 filtered = filtered.sort_values(["Date_Sort", "Company"], ascending=[False, True]).drop(columns=["Date_Sort"])
-                filtered["label"] = filtered.apply(build_record_label, axis=1)
 
-                c1, c2 = st.columns([1, 1])
-                with c1:
-                    st.metric("Matching Fee Records", f"{len(filtered):,}")
-                with c2:
-                    st.metric("Total Fee Records", f"{len(fee_df):,}")
+                selection_table = build_edit_selection_table(filtered, is_fee=True)
+                st.dataframe(selection_table, use_container_width=True, hide_index=True)
 
-                selected_label = st.selectbox(
-                    "Fee Record to Edit",
-                    filtered["label"].tolist(),
-                    key="selected_fee_label",
+                selected_row_index = st.number_input(
+                    "Row ID to edit",
+                    min_value=int(selection_table["Row ID"].min()),
+                    max_value=int(selection_table["Row ID"].max()),
+                    value=int(selection_table["Row ID"].iloc[0]),
+                    step=1,
+                    key="selected_fee_row_id",
                 )
-                selected_row_index = filtered.loc[filtered["label"] == selected_label, "index"].iloc[0]
+
                 selected_row = df.loc[selected_row_index].to_dict()
 
                 selected_date = pd.to_datetime(selected_row.get("Date"), errors="coerce")
@@ -1173,6 +1226,7 @@ with tab3:
                     existing_row=selected_row,
                     form_key="edit_fee_form",
                     is_new=False,
+                    require_confirmation=True,
                 )
 
                 if edited_fee_row is not None:
