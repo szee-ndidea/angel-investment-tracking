@@ -15,29 +15,29 @@ st.markdown(
         font-weight: 600 !important;
     }
 
-    div[data-testid="stFormSubmitButton"] > button[kind*="primary"],
-    div[data-testid="stFormSubmitButton"] > button[data-testid*="primary"] {
+    div[data-testid="stFormSubmitButton"] > button[kind="primary"],
+    div[data-testid="stFormSubmitButton"] > button[data-testid="baseButton-primary"] {
         background-color: #16a34a !important;
         border: 1px solid #16a34a !important;
         color: white !important;
     }
 
-    div[data-testid="stFormSubmitButton"] > button[kind*="primary"]:hover,
-    div[data-testid="stFormSubmitButton"] > button[data-testid*="primary"]:hover {
+    div[data-testid="stFormSubmitButton"] > button[kind="primary"]:hover,
+    div[data-testid="stFormSubmitButton"] > button[data-testid="baseButton-primary"]:hover {
         background-color: #15803d !important;
         border: 1px solid #15803d !important;
         color: white !important;
     }
 
-    div[data-testid="stFormSubmitButton"] > button[kind*="secondary"],
-    div[data-testid="stFormSubmitButton"] > button[data-testid*="secondary"] {
+    div[data-testid="stFormSubmitButton"] > button[kind="secondary"],
+    div[data-testid="stFormSubmitButton"] > button[data-testid="baseButton-secondary"] {
         background-color: #dc2626 !important;
         border: 1px solid #dc2626 !important;
         color: white !important;
     }
 
-    div[data-testid="stFormSubmitButton"] > button[kind*="secondary"]:hover,
-    div[data-testid="stFormSubmitButton"] > button[data-testid*="secondary"]:hover {
+    div[data-testid="stFormSubmitButton"] > button[kind="secondary"]:hover,
+    div[data-testid="stFormSubmitButton"] > button[data-testid="baseButton-secondary"]:hover {
         background-color: #b91c1c !important;
         border: 1px solid #b91c1c !important;
         color: white !important;
@@ -72,7 +72,6 @@ STATUS_OPTIONS = [
 ]
 
 ZERO_CURRENT_VALUE_STATUSES = {"Exited", "Partial Realized", "Written Off", "Closed"}
-
 COMPANY_WIDE_EXIT_STATUSES = {"Exited", "Written Off", "Closed"}
 
 INSTRUMENT_OPTIONS = [
@@ -86,11 +85,55 @@ INSTRUMENT_OPTIONS = [
     "Other",
 ]
 
+INVESTMENT_INSTRUMENT_OPTIONS = [x for x in INSTRUMENT_OPTIONS if x != "Fee"]
 METRIC_VIEW_OPTIONS = ["Total", "Realized", "Unrealized"]
+
+COLUMN_MAP = {
+    "date": "Date",
+    "company": "Company",
+    "company name": "Company",
+    "organization": "Company",
+    "instrument": "Instrument Type",
+    "instrument type": "Instrument Type",
+    "security": "Instrument Type",
+    "security type": "Instrument Type",
+    "round": "Round/Stage",
+    "stage": "Round/Stage",
+    "round/stage": "Round/Stage",
+    "gross investment": "Gross Investment",
+    "investment amount": "Gross Investment",
+    "amount": "Gross Investment",
+    "fees": "Fees",
+    "current value": "Current Value",
+    "value": "Current Value",
+    "distributions": "Distributions",
+    "distribution": "Distributions",
+    "realized distributions": "Distributions",
+    "cash distributions": "Distributions",
+    "status": "Status",
+    "company value at investment": "Valuation/Cap at Investment",
+    "valuation at investment": "Valuation/Cap at Investment",
+    "company valuation": "Valuation/Cap at Investment",
+    "valuation/cap at investment": "Valuation/Cap at Investment",
+    "cap at investment": "Valuation/Cap at Investment",
+    "source of deal": "Source of Deal",
+    "deal source": "Source of Deal",
+    "source": "Source of Deal",
+    "date added": "Date Added",
+    "created at": "Date Added",
+    "date created": "Date Added",
+    "date updated": "Date Updated",
+    "updated at": "Date Updated",
+    "last updated": "Date Updated",
+}
 
 
 def empty_df() -> pd.DataFrame:
     return pd.DataFrame(columns=EXPECTED_COLUMNS)
+
+
+def now_timestamp() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def parse_money(value):
@@ -163,8 +206,6 @@ def canonicalize_status(value) -> str:
     if text == "":
         return "Active"
 
-    lowered = text.lower()
-
     status_map = {
         "active": "Active",
         "exited": "Exited",
@@ -180,7 +221,57 @@ def canonicalize_status(value) -> str:
         "other": "Closed",
     }
 
-    return status_map.get(lowered, "Active")
+    return status_map.get(text.lower(), "Active")
+
+
+def format_currency(value) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"${value:,.0f}"
+
+
+def format_currency_blank(value) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    return f"${value:,.0f}"
+
+
+def format_multiple(value) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"{value:.2f}x"
+
+
+def money_input(label: str, value=0.0, help_text=None, disabled: bool = False, key=None) -> float:
+    default_text = f"{float(value):,.0f}" if value not in [None, ""] and not pd.isna(value) else ""
+    raw = st.text_input(label, value=default_text, help=help_text, disabled=disabled, key=key)
+    try:
+        return parse_money(raw)
+    except Exception:
+        st.error(f"{label} must be a valid dollar amount.")
+        st.stop()
+
+
+def nullable_money_input(label: str, value=None, help_text=None, disabled: bool = False, key=None):
+    default_text = "" if value is None or pd.isna(value) else f"{float(value):,.0f}"
+    raw = st.text_input(label, value=default_text, help=help_text, disabled=disabled, key=key)
+    try:
+        return parse_nullable_money(raw)
+    except Exception:
+        st.error(f"{label} must be a valid dollar amount or blank.")
+        st.stop()
+
+
+def investment_only_df(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+    return df[df["Instrument Type"].fillna("") != "Fee"].copy()
+
+
+def fee_only_df(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+    return df[df["Instrument Type"].fillna("") == "Fee"].copy()
 
 
 def apply_status_value_rules(df: pd.DataFrame) -> pd.DataFrame:
@@ -201,81 +292,15 @@ def apply_status_value_rules(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def money_input(label: str, value=0.0, help_text=None, disabled: bool = False, key=None) -> float:
-    default_text = f"{float(value):,.0f}" if value not in [None, ""] and not pd.isna(value) else ""
-    raw = st.text_input(label, value=default_text, help=help_text, disabled=disabled, key=key)
-    try:
-        return parse_money(raw)
-    except Exception:
-        st.error(f"{label} must be a valid dollar amount.")
-        st.stop()
-
-
-def nullable_money_input(label: str, value=None, help_text=None, disabled: bool = False, key=None):
-    if value is None or pd.isna(value):
-        default_text = ""
-    else:
-        default_text = f"{float(value):,.0f}"
-    raw = st.text_input(label, value=default_text, help=help_text, disabled=disabled, key=key)
-    try:
-        return parse_nullable_money(raw)
-    except Exception:
-        st.error(f"{label} must be a valid dollar amount or blank.")
-        st.stop()
-
-
-def now_timestamp() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
 def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
 
-    column_map = {
-        "date": "Date",
-        "company": "Company",
-        "company name": "Company",
-        "organization": "Company",
-        "instrument": "Instrument Type",
-        "instrument type": "Instrument Type",
-        "security": "Instrument Type",
-        "security type": "Instrument Type",
-        "round": "Round/Stage",
-        "stage": "Round/Stage",
-        "round/stage": "Round/Stage",
-        "gross investment": "Gross Investment",
-        "investment amount": "Gross Investment",
-        "amount": "Gross Investment",
-        "fees": "Fees",
-        "current value": "Current Value",
-        "value": "Current Value",
-        "distributions": "Distributions",
-        "distribution": "Distributions",
-        "realized distributions": "Distributions",
-        "cash distributions": "Distributions",
-        "status": "Status",
-        "company value at investment": "Valuation/Cap at Investment",
-        "valuation at investment": "Valuation/Cap at Investment",
-        "company valuation": "Valuation/Cap at Investment",
-        "valuation/cap at investment": "Valuation/Cap at Investment",
-        "cap at investment": "Valuation/Cap at Investment",
-        "source of deal": "Source of Deal",
-        "deal source": "Source of Deal",
-        "source": "Source of Deal",
-        "date added": "Date Added",
-        "created at": "Date Added",
-        "date created": "Date Added",
-        "date updated": "Date Updated",
-        "updated at": "Date Updated",
-        "last updated": "Date Updated",
-    }
-
     rename_dict = {}
     for col in df.columns:
         key = col.strip().lower()
-        if key in column_map:
-            rename_dict[col] = column_map[key]
+        if key in COLUMN_MAP:
+            rename_dict[col] = COLUMN_MAP[key]
 
     df = df.rename(columns=rename_dict)
 
@@ -309,36 +334,6 @@ def export_ready_df(df: pd.DataFrame) -> pd.DataFrame:
     if not out.empty:
         out["Date"] = pd.to_datetime(out["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
     return out
-
-
-def format_currency(value) -> str:
-    if value is None or pd.isna(value):
-        return "N/A"
-    return f"${value:,.0f}"
-
-
-def format_currency_blank(value) -> str:
-    if value is None or pd.isna(value):
-        return ""
-    return f"${value:,.0f}"
-
-
-def format_multiple(value) -> str:
-    if value is None or pd.isna(value):
-        return "N/A"
-    return f"{value:.2f}x"
-
-
-def investment_only_df(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df.copy()
-    return df[df["Instrument Type"].fillna("") != "Fee"].copy()
-
-
-def fee_only_df(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df.copy()
-    return df[df["Instrument Type"].fillna("") == "Fee"].copy()
 
 
 def value_basis_series(df: pd.DataFrame, metric_view: str) -> pd.Series:
@@ -428,8 +423,7 @@ def company_summary(df: pd.DataFrame) -> pd.DataFrame:
         / (summary["gross_investment"] + summary["fees"]).replace(0, pd.NA)
     )
 
-    summary = summary.sort_values(["gross_investment", "Company"], ascending=[False, True])
-    return summary
+    return summary.sort_values(["gross_investment", "Company"], ascending=[False, True])
 
 
 def org_fee_summary(df: pd.DataFrame) -> pd.DataFrame:
@@ -451,8 +445,7 @@ def org_fee_summary(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
 
-    summary = summary.sort_values(["total_fees", "Company"], ascending=[False, True])
-    return summary
+    return summary.sort_values(["total_fees", "Company"], ascending=[False, True])
 
 
 def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
@@ -477,13 +470,7 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
 
-    fee_yearly = (
-        fee_df.groupby("Year", dropna=False)
-        .agg(
-            fees_only=("Fees", "sum"),
-        )
-        .reset_index()
-    )
+    fee_yearly = fee_df.groupby("Year", dropna=False).agg(fees_only=("Fees", "sum")).reset_index()
 
     yearly = pd.merge(invest_yearly, fee_yearly, on="Year", how="outer").sort_values("Year")
     yearly["gross_investment"] = yearly["gross_investment"].fillna(0.0)
@@ -521,6 +508,84 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
     ]
 
 
+def apply_company_exit_update(updated_df: pd.DataFrame, company: str, new_status: str) -> pd.DataFrame:
+    if updated_df.empty or not company or new_status not in COMPANY_WIDE_EXIT_STATUSES:
+        return updated_df
+
+    out = updated_df.copy()
+    company_mask = (out["Instrument Type"].fillna("") != "Fee") & out["Company"].eq(company)
+    out.loc[company_mask, "Status"] = new_status
+    out.loc[company_mask, "Current Value"] = 0.0
+    out.loc[company_mask, "Date Updated"] = now_timestamp()
+    return out
+
+
+def sort_portfolio_df(df: pd.DataFrame) -> pd.DataFrame:
+    return df.sort_values(["Date", "Company"], ascending=[False, True], na_position="last").reset_index(drop=True)
+
+
+def add_row_and_refresh(df: pd.DataFrame, new_row: dict, toast_message: str, success_message: str):
+    updated = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+    updated = normalize_dataframe(updated)
+    updated = sort_portfolio_df(updated)
+    st.session_state.df = updated
+    st.toast(toast_message)
+    st.success(success_message)
+    st.rerun()
+
+
+def build_edit_selection_table(filtered_df: pd.DataFrame, is_fee: bool = False) -> pd.DataFrame:
+    temp = filtered_df.copy().reset_index()
+    temp["Date"] = pd.to_datetime(temp["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+    if is_fee:
+        display = temp[["index", "Date", "Company", "Fees", "Date Added", "Date Updated"]].copy()
+        display["Fees"] = display["Fees"].map(format_currency_blank)
+        return display.rename(
+            columns={
+                "index": "Row ID",
+                "Company": "Organization",
+                "Fees": "Fee Amount",
+            }
+        )
+
+    display = temp[
+        [
+            "index",
+            "Date",
+            "Company",
+            "Instrument Type",
+            "Gross Investment",
+            "Fees",
+            "Current Value",
+            "Distributions",
+            "Status",
+            "Date Added",
+            "Date Updated",
+        ]
+    ].copy()
+    for col in ["Gross Investment", "Fees", "Current Value", "Distributions"]:
+        display[col] = display[col].map(format_currency_blank)
+    return display.rename(columns={"index": "Row ID"})
+
+
+def validation_response(message: str) -> dict:
+    return {"action": "validation_error", "message": message}
+
+
+def build_action_buttons(show_delete: bool, save_label: str):
+    if show_delete:
+        action_left, action_right = st.columns(2)
+        with action_left:
+            save_clicked = st.form_submit_button(save_label, type="primary", use_container_width=True)
+        with action_right:
+            delete_clicked = st.form_submit_button("Delete", type="secondary", use_container_width=True)
+        return save_clicked, delete_clicked
+
+    save_clicked = st.form_submit_button(save_label, type="primary", use_container_width=True)
+    return save_clicked, False
+
+
 def investment_form(
     existing_row=None,
     form_key="investment_form",
@@ -532,7 +597,6 @@ def investment_form(
 ):
     if existing_row is None:
         existing_row = {}
-
     if existing_companies is None:
         existing_companies = []
 
@@ -554,9 +618,11 @@ def investment_form(
     with st.form(form_key, clear_on_submit=is_new):
         if is_new and company_mode == "follow_on":
             if existing_companies:
-                default_company_index = 0
-                if existing_company and existing_company in existing_companies:
-                    default_company_index = existing_companies.index(existing_company)
+                default_company_index = (
+                    existing_companies.index(existing_company)
+                    if existing_company and existing_company in existing_companies
+                    else 0
+                )
                 company = st.selectbox(
                     "Existing Company",
                     options=existing_companies,
@@ -566,28 +632,21 @@ def investment_form(
             else:
                 st.info("No existing investment companies yet. Add the first investment as a new company.")
                 company = ""
-        elif is_new:
-            company = st.text_input(
-                "Company",
-                value=existing_company,
-                key=f"{form_key}_company_new",
-            )
         else:
             company = st.text_input(
                 "Company",
                 value=existing_company,
-                key=f"{form_key}_company_edit",
+                key=f"{form_key}_{'company_new' if is_new else 'company_edit'}",
             )
 
         top1, top2 = st.columns(2)
         with top1:
             date = st.date_input("Date", value=existing_date, key=f"{form_key}_date")
         with top2:
-            investment_instruments = [x for x in INSTRUMENT_OPTIONS if x != "Fee"]
             instrument_type = st.selectbox(
                 "Instrument Type",
-                options=investment_instruments,
-                index=investment_instruments.index(existing_instrument),
+                options=INVESTMENT_INSTRUMENT_OPTIONS,
+                index=INVESTMENT_INSTRUMENT_OPTIONS.index(existing_instrument),
                 key=f"{form_key}_instrument_type",
             )
 
@@ -612,10 +671,11 @@ def investment_form(
                 key=f"{form_key}_round_stage",
             )
 
-        if instrument_type in ["SAFE", "Convertible Note"]:
-            valuation_help = "For SAFE or convertible note deals, use the cap here when there is one. If there is no cap, leave this blank."
-        else:
-            valuation_help = "Leave blank if not applicable."
+        valuation_help = (
+            "For SAFE or convertible note deals, use the cap here when there is one. If there is no cap, leave this blank."
+            if instrument_type in ["SAFE", "Convertible Note"]
+            else "Leave blank if not applicable."
+        )
 
         bot1, bot2 = st.columns(2)
         with bot1:
@@ -685,40 +745,20 @@ def investment_form(
                 )
 
         confirm_action = True
-
         if require_confirmation:
             confirm_action = st.checkbox(
                 "I confirm I want to save changes or delete this record.",
                 key=f"{form_key}_confirm_action",
             )
 
-        if show_delete:
-            action_left, action_right = st.columns(2)
-            with action_left:
-                save_clicked = st.form_submit_button(
-                    "Save Changes",
-                    type="primary",
-                    use_container_width=True,
-                )
-            with action_right:
-                delete_clicked = st.form_submit_button(
-                    "Delete",
-                    type="secondary",
-                    use_container_width=True,
-                )
-        else:
-            save_clicked = st.form_submit_button(
-                "Add Transaction" if is_new else "Save Changes",
-                type="primary",
-                use_container_width=True,
-            )
-            delete_clicked = False
+        save_label = "Add Transaction" if is_new else "Save Changes"
+        save_clicked, delete_clicked = build_action_buttons(show_delete=show_delete, save_label=save_label)
 
     if not save_clicked and not delete_clicked:
         return None
 
     if (save_clicked or delete_clicked) and require_confirmation and not confirm_action:
-        return {"action": "validation_error", "message": "Please confirm before saving or deleting this record."}
+        return validation_response("Please confirm before saving or deleting this record.")
 
     if is_new:
         current_value = gross_investment
@@ -727,15 +767,8 @@ def investment_form(
     if status in ZERO_CURRENT_VALUE_STATUSES:
         current_value = 0.0
 
-    created_at = str(existing_row.get("Date Added", "") or "").strip()
-    if created_at == "":
-        created_at = now_timestamp()
-
-    updated_at = ""
-    if not is_new and save_clicked:
-        updated_at = now_timestamp()
-    elif not is_new:
-        updated_at = str(existing_row.get("Date Updated", "") or "").strip()
+    created_at = str(existing_row.get("Date Added", "") or "").strip() or now_timestamp()
+    updated_at = now_timestamp() if (not is_new and save_clicked) else str(existing_row.get("Date Updated", "") or "").strip()
 
     out = {
         "Date": pd.to_datetime(date),
@@ -756,6 +789,7 @@ def investment_form(
     out_df = pd.DataFrame([out])
     out_df["Status"] = out_df["Status"].apply(canonicalize_status)
     out_df = apply_status_value_rules(out_df)
+
     return {
         "action": "delete" if delete_clicked else "save",
         "row": out_df.iloc[0].to_dict(),
@@ -790,50 +824,23 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confi
             )
 
         confirm_action = True
-
         if require_confirmation:
             confirm_action = st.checkbox(
                 "I confirm I want to save changes or delete this record.",
                 key=f"{form_key}_confirm_action",
             )
 
-        if show_delete:
-            action_left, action_right = st.columns(2)
-            with action_left:
-                save_clicked = st.form_submit_button(
-                    "Save Fee Changes",
-                    type="primary",
-                    use_container_width=True,
-                )
-            with action_right:
-                delete_clicked = st.form_submit_button(
-                    "Delete",
-                    type="secondary",
-                    use_container_width=True,
-                )
-        else:
-            save_clicked = st.form_submit_button(
-                "Add Fee Record" if is_new else "Save Fee Changes",
-                type="primary",
-                use_container_width=True,
-            )
-            delete_clicked = False
+        save_label = "Add Fee Record" if is_new else "Save Fee Changes"
+        save_clicked, delete_clicked = build_action_buttons(show_delete=show_delete, save_label=save_label)
 
     if not save_clicked and not delete_clicked:
         return None
 
     if (save_clicked or delete_clicked) and require_confirmation and not confirm_action:
-        return {"action": "validation_error", "message": "Please confirm before saving or deleting this record."}
+        return validation_response("Please confirm before saving or deleting this record.")
 
-    created_at = str(existing_row.get("Date Added", "") or "").strip()
-    if created_at == "":
-        created_at = now_timestamp()
-
-    updated_at = ""
-    if not is_new and save_clicked:
-        updated_at = now_timestamp()
-    elif not is_new:
-        updated_at = str(existing_row.get("Date Updated", "") or "").strip()
+    created_at = str(existing_row.get("Date Added", "") or "").strip() or now_timestamp()
+    updated_at = now_timestamp() if (not is_new and save_clicked) else str(existing_row.get("Date Updated", "") or "").strip()
 
     out = {
         "Date": pd.to_datetime(date),
@@ -850,69 +857,11 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confi
         "Date Added": created_at,
         "Date Updated": updated_at,
     }
+
     return {
         "action": "delete" if delete_clicked else "save",
         "row": out,
     }
-
-
-def apply_company_exit_update(updated_df: pd.DataFrame, company: str, new_status: str) -> pd.DataFrame:
-    if updated_df.empty or not company or new_status not in COMPANY_WIDE_EXIT_STATUSES:
-        return updated_df
-
-    out = updated_df.copy()
-    company_mask = (out["Instrument Type"].fillna("") != "Fee") & out["Company"].eq(company)
-    out.loc[company_mask, "Status"] = new_status
-    out.loc[company_mask, "Current Value"] = 0.0
-    out.loc[company_mask, "Date Updated"] = now_timestamp()
-    return out
-
-
-def add_row_and_refresh(df: pd.DataFrame, new_row: dict, toast_message: str, success_message: str):
-    updated = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-    updated = normalize_dataframe(updated)
-    updated = updated.sort_values(["Date", "Company"], ascending=[False, True], na_position="last").reset_index(drop=True)
-    st.session_state.df = updated
-    st.toast(toast_message)
-    st.success(success_message)
-    st.rerun()
-
-
-def build_edit_selection_table(filtered_df: pd.DataFrame, is_fee: bool = False) -> pd.DataFrame:
-    temp = filtered_df.copy().reset_index()
-    temp["Date"] = pd.to_datetime(temp["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
-
-    if is_fee:
-        display = temp[["index", "Date", "Company", "Fees", "Date Added", "Date Updated"]].copy()
-        display["Fees"] = display["Fees"].map(format_currency_blank)
-        display = display.rename(
-            columns={
-                "index": "Row ID",
-                "Company": "Organization",
-                "Fees": "Fee Amount",
-            }
-        )
-    else:
-        display = temp[
-            [
-                "index",
-                "Date",
-                "Company",
-                "Instrument Type",
-                "Gross Investment",
-                "Fees",
-                "Current Value",
-                "Distributions",
-                "Status",
-                "Date Added",
-                "Date Updated",
-            ]
-        ].copy()
-        for col in ["Gross Investment", "Fees", "Current Value", "Distributions"]:
-            display[col] = display[col].map(format_currency_blank)
-        display = display.rename(columns={"index": "Row ID"})
-
-    return display
 
 
 title_col, help_col = st.columns([20, 1])
@@ -960,6 +909,7 @@ if "overview_metric_view" not in st.session_state:
 
 df = normalize_dataframe(st.session_state.df) if not st.session_state.df.empty else empty_df()
 st.session_state.df = df
+
 existing_investment_companies = sorted(
     [c for c in investment_only_df(df)["Company"].dropna().unique().tolist() if c != ""]
 )
@@ -1004,13 +954,7 @@ with tab1:
     yearly = yearly_summary(df)
     if not yearly.empty:
         display_yearly = yearly.copy()
-        for col in [
-            "gross_investment",
-            "fees",
-            "current_value",
-            "distributions",
-            "gain_loss",
-        ]:
+        for col in ["gross_investment", "fees", "current_value", "distributions", "gain_loss"]:
             display_yearly[col] = display_yearly[col].map(format_currency)
         display_yearly["moic"] = display_yearly["moic"].map(format_multiple)
         display_yearly["tvpi"] = display_yearly["tvpi"].map(format_multiple)
@@ -1077,9 +1021,9 @@ with tab1:
     else:
         display_fee_summary = fee_summary.copy()
         display_fee_summary["total_fees"] = display_fee_summary["total_fees"].map(format_currency)
-        display_fee_summary["latest_date"] = pd.to_datetime(display_fee_summary["latest_date"], errors="coerce").dt.strftime(
-            "%Y-%m-%d"
-        )
+        display_fee_summary["latest_date"] = pd.to_datetime(
+            display_fee_summary["latest_date"], errors="coerce"
+        ).dt.strftime("%Y-%m-%d")
 
         display_fee_summary = display_fee_summary.rename(
             columns={
@@ -1191,7 +1135,7 @@ with tab3:
             with f2:
                 instrument_filter = st.selectbox(
                     "Instrument Type",
-                    ["All"] + [x for x in INSTRUMENT_OPTIONS if x != "Fee"],
+                    ["All"] + INVESTMENT_INSTRUMENT_OPTIONS,
                     key="investment_instrument_filter",
                 )
             with f3:
@@ -1289,7 +1233,7 @@ with tab3:
                             )
 
                             updated = normalize_dataframe(updated)
-                            updated = updated.sort_values(["Date", "Company"], ascending=[False, True], na_position="last").reset_index(drop=True)
+                            updated = sort_portfolio_df(updated)
                             st.session_state.df = updated
                             st.toast("Investment updated")
 
@@ -1388,7 +1332,7 @@ with tab3:
                             for key, value in edited_fee_row.items():
                                 updated.at[selected_row_index, key] = value
                             updated = normalize_dataframe(updated)
-                            updated = updated.sort_values(["Date", "Company"], ascending=[False, True], na_position="last").reset_index(drop=True)
+                            updated = sort_portfolio_df(updated)
                             st.session_state.df = updated
                             st.toast("Fee record updated")
                             st.success("Fee record updated. Download your CSV to keep it.")
