@@ -17,6 +17,8 @@ EXPECTED_COLUMNS = [
     "Status",
     "Valuation/Cap at Investment",
     "Source of Deal",
+    "Date Added",
+    "Date Updated",
 ]
 
 STATUS_OPTIONS = [
@@ -180,6 +182,10 @@ def nullable_money_input(label: str, value=None, help_text=None, disabled: bool 
         st.stop()
 
 
+def now_timestamp() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
 def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
@@ -215,6 +221,12 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         "source of deal": "Source of Deal",
         "deal source": "Source of Deal",
         "source": "Source of Deal",
+        "date added": "Date Added",
+        "created at": "Date Added",
+        "date created": "Date Added",
+        "date updated": "Date Updated",
+        "updated at": "Date Updated",
+        "last updated": "Date Updated",
     }
 
     rename_dict = {}
@@ -242,6 +254,8 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df["Round/Stage"] = df["Round/Stage"].fillna("").astype(str).str.strip()
     df["Status"] = df["Status"].apply(canonicalize_status)
     df["Source of Deal"] = df["Source of Deal"].fillna("").astype(str).str.strip()
+    df["Date Added"] = df["Date Added"].fillna("").astype(str).str.strip()
+    df["Date Updated"] = df["Date Updated"].fillna("").astype(str).str.strip()
 
     df = apply_status_value_rules(df)
     df = df.dropna(how="all")
@@ -472,6 +486,7 @@ def investment_form(
     existing_companies=None,
     company_mode="new",
     require_confirmation=False,
+    show_submit=True,
 ):
     if existing_row is None:
         existing_row = {}
@@ -625,10 +640,15 @@ def investment_form(
                 key=f"{form_key}_confirm_edit",
             )
 
-        submitted = st.form_submit_button(
-            "Add Transaction" if is_new else "Save Changes",
-            disabled=not confirm_edit,
-        )
+        submitted = False
+        if show_submit:
+            submitted = st.form_submit_button(
+                "Add Transaction" if is_new else "Save Changes",
+                disabled=not confirm_edit,
+            )
+
+    if not show_submit:
+        submitted = True
 
     if not submitted:
         return None
@@ -639,6 +659,14 @@ def investment_form(
 
     if status in ZERO_CURRENT_VALUE_STATUSES:
         current_value = 0.0
+
+    created_at = str(existing_row.get("Date Added", "") or "").strip()
+    if created_at == "":
+        created_at = now_timestamp()
+
+    updated_at = ""
+    if not is_new:
+        updated_at = now_timestamp()
 
     out = {
         "Date": pd.to_datetime(date),
@@ -652,6 +680,8 @@ def investment_form(
         "Status": status,
         "Valuation/Cap at Investment": valuation_cap,
         "Source of Deal": source_of_deal.strip(),
+        "Date Added": created_at,
+        "Date Updated": updated_at,
     }
 
     out_df = pd.DataFrame([out])
@@ -660,7 +690,7 @@ def investment_form(
     return out_df.iloc[0].to_dict()
 
 
-def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confirmation=False):
+def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confirmation=False, show_submit=True):
     if existing_row is None:
         existing_row = {}
 
@@ -690,13 +720,26 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confi
                 key=f"{form_key}_confirm_edit",
             )
 
-        submitted = st.form_submit_button(
-            "Add Fee Record" if is_new else "Save Fee Changes",
-            disabled=not confirm_edit,
-        )
+        submitted = False
+        if show_submit:
+            submitted = st.form_submit_button(
+                "Add Fee Record" if is_new else "Save Fee Changes",
+                disabled=not confirm_edit,
+            )
+
+    if not show_submit:
+        submitted = True
 
     if not submitted:
         return None
+
+    created_at = str(existing_row.get("Date Added", "") or "").strip()
+    if created_at == "":
+        created_at = now_timestamp()
+
+    updated_at = ""
+    if not is_new:
+        updated_at = now_timestamp()
 
     return {
         "Date": pd.to_datetime(date),
@@ -710,6 +753,8 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False, require_confi
         "Status": "Active",
         "Valuation/Cap at Investment": pd.NA,
         "Source of Deal": "",
+        "Date Added": created_at,
+        "Date Updated": updated_at,
     }
 
 
@@ -721,6 +766,7 @@ def apply_company_exit_update(updated_df: pd.DataFrame, company: str, new_status
     company_mask = (out["Instrument Type"].fillna("") != "Fee") & out["Company"].eq(company)
     out.loc[company_mask, "Status"] = new_status
     out.loc[company_mask, "Current Value"] = 0.0
+    out.loc[company_mask, "Date Updated"] = now_timestamp()
     return out
 
 
@@ -739,7 +785,7 @@ def build_edit_selection_table(filtered_df: pd.DataFrame, is_fee: bool = False) 
     temp["Date"] = pd.to_datetime(temp["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
     if is_fee:
-        display = temp[["index", "Date", "Company", "Fees"]].copy()
+        display = temp[["index", "Date", "Company", "Fees", "Date Added", "Date Updated"]].copy()
         display["Fees"] = display["Fees"].map(format_currency_blank)
         display = display.rename(
             columns={
@@ -750,7 +796,19 @@ def build_edit_selection_table(filtered_df: pd.DataFrame, is_fee: bool = False) 
         )
     else:
         display = temp[
-            ["index", "Date", "Company", "Instrument Type", "Gross Investment", "Fees", "Current Value", "Distributions", "Status"]
+            [
+                "index",
+                "Date",
+                "Company",
+                "Instrument Type",
+                "Gross Investment",
+                "Fees",
+                "Current Value",
+                "Distributions",
+                "Status",
+                "Date Added",
+                "Date Updated",
+            ]
         ].copy()
         for col in ["Gross Investment", "Fees", "Current Value", "Distributions"]:
             display[col] = display[col].map(format_currency_blank)
@@ -1080,28 +1138,39 @@ with tab3:
                 s8.metric("Distributions", format_currency_blank(selected_row.get("Distributions", 0)) or "$0")
 
                 st.caption(f"Total Paid: {format_currency_blank(selected_total_paid) or '$0'}")
+                st.caption(f"Date Added: {selected_row.get('Date Added', '') or 'N/A'}")
+                st.caption(f"Date Updated: {selected_row.get('Date Updated', '') or 'N/A'}")
                 st.markdown("#### Edit Investment")
 
-                edited_row = investment_form(
-                    existing_row=selected_row,
-                    form_key="edit_investment_form",
-                    is_new=False,
-                    existing_companies=existing_investment_companies,
-                    require_confirmation=True,
-                )
+                edit_col, delete_col = st.columns([4, 1])
 
-                st.markdown("#### Delete Investment Transaction")
-                st.write("This removes the selected investment transaction from the current session.")
-                confirm_delete = st.checkbox(
-                    "I understand and want to delete this investment transaction",
-                    key="confirm_delete_investment",
-                )
-                if st.button(
-                    "Delete Selected Investment",
-                    type="secondary",
-                    disabled=not confirm_delete,
-                    key="delete_investment_button",
-                ):
+                with edit_col:
+                    edited_row = investment_form(
+                        existing_row=selected_row,
+                        form_key="edit_investment_form",
+                        is_new=False,
+                        existing_companies=existing_investment_companies,
+                        require_confirmation=True,
+                        show_submit=True,
+                    )
+
+                with delete_col:
+                    st.write("")
+                    st.write("")
+                    st.write("")
+                    confirm_delete = st.checkbox(
+                        "Confirm delete",
+                        key="confirm_delete_investment",
+                    )
+                    delete_clicked = st.button(
+                        "Delete",
+                        type="secondary",
+                        disabled=not confirm_delete,
+                        key="delete_investment_button",
+                        use_container_width=True,
+                    )
+
+                if delete_clicked:
                     updated = df.drop(index=selected_row_index).reset_index(drop=True)
                     updated = normalize_dataframe(updated) if not updated.empty else empty_df()
                     st.session_state.df = updated
@@ -1192,27 +1261,38 @@ with tab3:
                 s2.metric("Organization", selected_row.get("Company", "") or "N/A")
                 s3.metric("Fee Amount", format_currency_blank(selected_row.get("Fees", 0)) or "$0")
 
+                st.caption(f"Date Added: {selected_row.get('Date Added', '') or 'N/A'}")
+                st.caption(f"Date Updated: {selected_row.get('Date Updated', '') or 'N/A'}")
                 st.markdown("#### Edit Fee Record")
 
-                edited_fee_row = fee_form(
-                    existing_row=selected_row,
-                    form_key="edit_fee_form",
-                    is_new=False,
-                    require_confirmation=True,
-                )
+                edit_col, delete_col = st.columns([4, 1])
 
-                st.markdown("#### Delete Fee Record")
-                st.write("This removes the selected fee record from the current session.")
-                confirm_delete = st.checkbox(
-                    "I understand and want to delete this fee record",
-                    key="confirm_delete_fee",
-                )
-                if st.button(
-                    "Delete Selected Fee Record",
-                    type="secondary",
-                    disabled=not confirm_delete,
-                    key="delete_fee_button",
-                ):
+                with edit_col:
+                    edited_fee_row = fee_form(
+                        existing_row=selected_row,
+                        form_key="edit_fee_form",
+                        is_new=False,
+                        require_confirmation=True,
+                        show_submit=True,
+                    )
+
+                with delete_col:
+                    st.write("")
+                    st.write("")
+                    st.write("")
+                    confirm_delete = st.checkbox(
+                        "Confirm delete",
+                        key="confirm_delete_fee",
+                    )
+                    delete_clicked = st.button(
+                        "Delete",
+                        type="secondary",
+                        disabled=not confirm_delete,
+                        key="delete_fee_button",
+                        use_container_width=True,
+                    )
+
+                if delete_clicked:
                     updated = df.drop(index=selected_row_index).reset_index(drop=True)
                     updated = normalize_dataframe(updated) if not updated.empty else empty_df()
                     st.session_state.df = updated
