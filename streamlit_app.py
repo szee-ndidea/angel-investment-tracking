@@ -1340,18 +1340,23 @@ with tab3:
 
 with tab4:
     st.subheader("Upload CSV")
-    uploaded_csv = st.file_uploader("Import CSV", type=["csv"])
+    uploaded_csv = st.file_uploader("Import CSV", type=["csv"], key="csv_uploader")
 
     if uploaded_csv is not None:
-        try:
-            imported = pd.read_csv(uploaded_csv)
-            imported = normalize_dataframe(imported)
-            st.session_state.df = imported
-            st.toast("CSV uploaded")
-            st.success("CSV loaded into this session.")
-            st.rerun()
-        except Exception as e:
-            st.error(f"CSV import failed: {e}")
+        st.caption(f"Selected file: {uploaded_csv.name}")
+        if st.button("Load CSV", type="primary", use_container_width=False):
+            try:
+                uploaded_csv.seek(0)
+                imported = pd.read_csv(uploaded_csv)
+                imported = normalize_dataframe(imported)
+                st.session_state.df = imported
+                st.toast("CSV uploaded")
+                st.success("CSV loaded into this session.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"CSV import failed: {e}")
+    else:
+        st.info("Choose a CSV file, then click Load CSV.")
 
     st.subheader("Download CSV")
     export_df = export_ready_df(st.session_state.df)
