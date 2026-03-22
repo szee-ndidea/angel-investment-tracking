@@ -465,18 +465,12 @@ def yearly_summary(df: pd.DataFrame) -> pd.DataFrame:
     ]
 
 
-def get_existing_investment_companies() -> list[str]:
-    if "df" not in st.session_state or st.session_state.df.empty:
-        return []
-
-    temp_df = normalize_dataframe(st.session_state.df)
-    temp_df = investment_only_df(temp_df)
-    return sorted([c for c in temp_df["Company"].dropna().unique().tolist() if c != ""])
-
-
-def investment_form(existing_row=None, form_key="investment_form", is_new=False):
+def investment_form(existing_row=None, form_key="investment_form", is_new=False, existing_companies=None):
     if existing_row is None:
         existing_row = {}
+
+    if existing_companies is None:
+        existing_companies = []
 
     existing_date = existing_row.get("Date")
     if pd.isna(existing_date):
@@ -492,22 +486,21 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
     existing_company = existing_row.get("Company", "") or ""
     existing_round_stage = existing_row.get("Round/Stage", "") or ""
     existing_source = existing_row.get("Source of Deal", "") or ""
-    existing_companies = get_existing_investment_companies()
 
-    with st.form(form_key, clear_on_submit=False):
+    with st.form(form_key, clear_on_submit=is_new):
         if is_new:
             follow_on_col, _ = st.columns([1, 3])
             with follow_on_col:
                 is_follow_on = st.checkbox(
                     "Follow-on investment",
-                    value=(existing_company in existing_companies and existing_company != ""),
+                    value=False,
                     help="Creates a new transaction row using an existing portfolio company name.",
                     key=f"{form_key}_is_follow_on",
                 )
         else:
             is_follow_on = False
 
-        top1, top2, top3 = st.columns(3)
+        top1, top2 = st.columns(2)
         with top1:
             date = st.date_input("Date", value=existing_date)
         with top2:
@@ -517,17 +510,6 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
                 options=investment_instruments,
                 index=investment_instruments.index(existing_instrument),
             )
-        with top3:
-            if not is_new:
-                status = st.selectbox(
-                    "Status",
-                    options=STATUS_OPTIONS,
-                    index=STATUS_OPTIONS.index(existing_status),
-                    key=f"{form_key}_status",
-                )
-            else:
-                status = "Active"
-                st.text_input("Status", value="Active", disabled=True)
 
         if is_follow_on and existing_companies:
             selected_default = existing_company if existing_company in existing_companies else existing_companies[0]
@@ -578,25 +560,43 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
         with bot2:
             source_of_deal = st.text_input("Source of Deal", value=existing_source)
 
-        disable_current_value = (not is_new) and (status in ZERO_CURRENT_VALUE_STATUSES)
-        current_value_display = 0.0 if disable_current_value else existing_row.get("Current Value", 0.0)
-        current_value_help = (
-            "Automatically reset to zero for Exited, Partial Realized, Written Off, and Closed."
-            if disable_current_value
-            else "Unrealized residual value still held."
-        )
+        if is_new:
+            status = "Active"
+            current_value = money_input(
+                "Current Value ($)",
+                existing_row.get("Gross Investment", 0.0),
+                help_text="For a new transaction this is set automatically to Gross Investment. Fees are separate and not part of value.",
+                disabled=True,
+                key=f"{form_key}_current_value_new",
+            )
+            distributions = money_input(
+                "Distributions ($)",
+                0.0,
+                help_text="Not used when adding a new investment transaction.",
+                disabled=True,
+                key=f"{form_key}_distributions_new",
+            )
+            st.info(
+                "On save, this will be added as a new transaction row with Status = Active, Current Value = Gross Investment, and Distributions = $0."
+            )
+        else:
+            status = st.selectbox(
+                "Status",
+                options=STATUS_OPTIONS,
+                index=STATUS_OPTIONS.index(existing_status),
+                key=f"{form_key}_status",
+            )
 
-        val1, val2 = st.columns(2)
-        with val1:
-            if is_new:
-                current_value = money_input(
-                    "Current Value ($)",
-                    existing_row.get("Gross Investment", 0.0),
-                    help_text="For a new transaction this is set automatically to Gross Investment. Fees are separate and not part of value.",
-                    disabled=True,
-                    key=f"{form_key}_current_value_new",
-                )
-            else:
+            disable_current_value = status in ZERO_CURRENT_VALUE_STATUSES
+            current_value_display = 0.0 if disable_current_value else existing_row.get("Current Value", 0.0)
+            current_value_help = (
+                "Automatically reset to zero for Exited, Partial Realized, Written Off, and Closed."
+                if disable_current_value
+                else "Unrealized residual value still held."
+            )
+
+            val1, val2 = st.columns(2)
+            with val1:
                 current_value = money_input(
                     "Current Value ($)",
                     current_value_display,
@@ -604,27 +604,13 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
                     disabled=disable_current_value,
                     key=f"{form_key}_current_value_edit",
                 )
-        with val2:
-            if is_new:
-                distributions = money_input(
-                    "Distributions ($)",
-                    0.0,
-                    help_text="Not used when adding a new investment transaction.",
-                    disabled=True,
-                    key=f"{form_key}_distributions_new",
-                )
-            else:
+            with val2:
                 distributions = money_input(
                     "Distributions ($)",
                     existing_row.get("Distributions", 0.0),
                     help_text="Cash returned from the company, for example on a partial or full exit.",
                     key=f"{form_key}_distributions_edit",
                 )
-
-        if is_new:
-            st.info(
-                "On save, this will be added as a new transaction row with Status = Active, Current Value = Gross Investment, and Distributions = $0."
-            )
 
         submitted = st.form_submit_button("Add Transaction" if is_new else "Save Changes")
 
@@ -668,7 +654,7 @@ def fee_form(existing_row=None, form_key="fee_form", is_new=False):
     elif hasattr(existing_date, "date"):
         existing_date = existing_date.date()
 
-    with st.form(form_key, clear_on_submit=False):
+    with st.form(form_key, clear_on_submit=is_new):
         top1, top2, top3 = st.columns(3)
         with top1:
             date = st.date_input("Date", value=existing_date)
@@ -773,6 +759,9 @@ if "overview_metric_view" not in st.session_state:
 
 df = normalize_dataframe(st.session_state.df) if not st.session_state.df.empty else empty_df()
 st.session_state.df = df
+existing_investment_companies = sorted(
+    [c for c in investment_only_df(df)["Company"].dropna().unique().tolist() if c != ""]
+)
 
 tab1, tab2, tab3, tab4 = st.tabs(
     ["Overview", "Add Investment", "Edit Investments", "Upload / Download"]
@@ -908,7 +897,11 @@ with tab2:
     add_investment_tab, add_fee_tab = st.tabs(["Add Investment", "Add Organization Fee"])
 
     with add_investment_tab:
-        new_row = investment_form(form_key="new_investment_form", is_new=True)
+        new_row = investment_form(
+            form_key="new_investment_form",
+            is_new=True,
+            existing_companies=existing_investment_companies,
+        )
         if new_row is not None:
             if not new_row["Company"]:
                 st.error("Company is required.")
@@ -1033,6 +1026,7 @@ with tab3:
                     existing_row=selected_row,
                     form_key="edit_investment_form",
                     is_new=False,
+                    existing_companies=existing_investment_companies,
                 )
 
                 if edited_row is not None:
