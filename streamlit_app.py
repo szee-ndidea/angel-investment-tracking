@@ -22,11 +22,9 @@ EXPECTED_COLUMNS = [
 STATUS_OPTIONS = [
     "Active",
     "Exited",
+    "Partial Realized",
     "Written Off",
-    "Partially Realized",
-    "Converted",
-    "Paused",
-    "Other",
+    "Closed",
 ]
 
 INSTRUMENT_OPTIONS = [
@@ -107,6 +105,55 @@ def parse_nullable_money(value):
 
     amount = float(text)
     return -amount if negative else amount
+
+
+def canonicalize_status(value) -> str:
+    if value is None or pd.isna(value):
+        return "Active"
+
+    text = str(value).strip()
+    if text == "":
+        return "Active"
+
+    lowered = text.lower()
+
+    status_map = {
+        "active": "Active",
+        "exited": "Exited",
+        "partial realized": "Partial Realized",
+        "partially realized": "Partial Realized",
+        "partial exit": "Partial Realized",
+        "partially exited": "Partial Realized",
+        "written off": "Written Off",
+        "write off": "Written Off",
+        "closed": "Closed",
+        "converted": "Closed",
+        "paused": "Closed",
+        "other": "Closed",
+    }
+
+    return status_map.get(lowered, "Active")
+
+
+def apply_status_value_rules(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+
+    fee_mask = out["Instrument Type"].eq("Fee")
+    out.loc[fee_mask, "Gross Investment"] = 0.0
+    out.loc[fee_mask, "Current Value"] = 0.0
+    out.loc[fee_mask, "Distributions"] = 0.0
+    out.loc[fee_mask, "Valuation/Cap at Investment"] = pd.NA
+    out.loc[fee_mask, "Round/Stage"] = ""
+    out.loc[fee_mask, "Source of Deal"] = ""
+    out.loc[fee_mask, "Status"] = "Active"
+
+    exited_like_mask = out["Status"].isin(["Exited", "Partial Realized"])
+    out.loc[exited_like_mask, "Current Value"] = 0.0
+
+    zero_value_mask = out["Status"].isin(["Written Off", "Closed"])
+    out.loc[zero_value_mask, "Current Value"] = 0.0
+
+    return out
 
 
 def money_input(label: str, value=0.0, help_text=None, disabled: bool = False, key=None) -> float:
@@ -192,18 +239,10 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df["Company"] = df["Company"].fillna("").astype(str).str.strip()
     df["Instrument Type"] = df["Instrument Type"].fillna("").astype(str).str.strip()
     df["Round/Stage"] = df["Round/Stage"].fillna("").astype(str).str.strip()
-    df["Status"] = df["Status"].fillna("Active").astype(str).str.strip()
+    df["Status"] = df["Status"].apply(canonicalize_status)
     df["Source of Deal"] = df["Source of Deal"].fillna("").astype(str).str.strip()
 
-    fee_mask = df["Instrument Type"].eq("Fee")
-    df.loc[fee_mask, "Gross Investment"] = 0.0
-    df.loc[fee_mask, "Current Value"] = 0.0
-    df.loc[fee_mask, "Distributions"] = 0.0
-    df.loc[fee_mask, "Valuation/Cap at Investment"] = pd.NA
-    df.loc[fee_mask, "Round/Stage"] = ""
-    df.loc[fee_mask, "Source of Deal"] = ""
-    df.loc[fee_mask, "Status"] = "Active"
-
+    df = apply_status_value_rules(df)
     df = df.dropna(how="all")
     return df
 
@@ -442,9 +481,7 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
     if existing_instrument not in INSTRUMENT_OPTIONS or existing_instrument == "Fee":
         existing_instrument = "SAFE"
 
-    existing_status = existing_row.get("Status", "Active")
-    if existing_status not in STATUS_OPTIONS:
-        existing_status = "Other"
+    existing_status = canonicalize_status(existing_row.get("Status", "Active"))
 
     existing_company = existing_row.get("Company", "") or ""
     existing_round_stage = existing_row.get("Round/Stage", "") or ""
@@ -528,7 +565,7 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
             if is_new:
                 current_value = money_input(
                     "Current Value ($)",
-                    gross_investment,
+                    existing_row.get("Gross Investment", 0.0),
                     help_text="For a new transaction this is set automatically to Gross Investment. Fees are separate and not part of value.",
                     disabled=True,
                     key=f"{form_key}_current_value_new",
@@ -537,7 +574,7 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
                 current_value = money_input(
                     "Current Value ($)",
                     existing_row.get("Current Value", 0.0),
-                    help_text="Use this for unrealized residual value still held.",
+                    help_text="Ignored and reset to zero for Exited, Partial Realized, Written Off, and Closed.",
                     key=f"{form_key}_current_value_edit",
                 )
         with val2:
@@ -566,7 +603,7 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
     if is_new:
         current_value = gross_investment
 
-    return {
+    out = {
         "Date": pd.to_datetime(date),
         "Company": company.strip(),
         "Instrument Type": instrument_type,
@@ -579,6 +616,11 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
         "Valuation/Cap at Investment": valuation_cap,
         "Source of Deal": source_of_deal.strip(),
     }
+
+    out_df = pd.DataFrame([out])
+    out_df["Status"] = out_df["Status"].apply(canonicalize_status)
+    out_df = apply_status_value_rules(out_df)
+    return out_df.iloc[0].to_dict()
 
 
 def fee_form(existing_row=None, form_key="fee_form", is_new=False):
@@ -676,6 +718,8 @@ with st.sidebar:
         Total Value = Current Value + Distributions
         MOIC = selected value basis / Gross Investment
         TVPI = selected value basis / (Gross Investment + Fees)
+        For Exited and Partial Realized, Current Value is reset to zero and value comes from Distributions.
+        For Written Off and Closed, Current Value is reset to zero.
         For SAFE or Convertible Note deals, use the cap as valuation when there is one.
         If there is no cap, leave valuation blank.
         """
@@ -912,9 +956,6 @@ with tab3:
                 selected_total_paid = parse_money(selected_row.get("Gross Investment", 0)) + parse_money(
                     selected_row.get("Fees", 0)
                 )
-                selected_total_value = parse_money(selected_row.get("Current Value", 0)) + parse_money(
-                    selected_row.get("Distributions", 0)
-                )
 
                 st.markdown("#### Selected Investment")
                 s1, s2, s3, s4 = st.columns(4)
@@ -923,12 +964,11 @@ with tab3:
                 s3.metric("Instrument", selected_row.get("Instrument Type", "") or "N/A")
                 s4.metric("Status", selected_row.get("Status", "") or "N/A")
 
-                s5, s6, s7, s8, s9 = st.columns(5)
+                s5, s6, s7, s8 = st.columns(4)
                 s5.metric("Gross Investment", format_currency_blank(selected_row.get("Gross Investment", 0)) or "$0")
                 s6.metric("Fees", format_currency_blank(selected_row.get("Fees", 0)) or "$0")
                 s7.metric("Current Value", format_currency_blank(selected_row.get("Current Value", 0)) or "$0")
                 s8.metric("Distributions", format_currency_blank(selected_row.get("Distributions", 0)) or "$0")
-                s9.metric("Total Value", format_currency_blank(selected_total_value) or "$0")
 
                 st.caption(f"Total Paid: {format_currency_blank(selected_total_paid) or '$0'}")
 
