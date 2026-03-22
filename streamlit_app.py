@@ -29,6 +29,8 @@ STATUS_OPTIONS = [
 
 ZERO_CURRENT_VALUE_STATUSES = {"Exited", "Partial Realized", "Written Off", "Closed"}
 
+COMPANY_WIDE_EXIT_STATUSES = {"Exited", "Written Off", "Closed"}
+
 INSTRUMENT_OPTIONS = [
     "SAFE",
     "Convertible Note",
@@ -155,6 +157,40 @@ def apply_status_value_rules(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def apply_company_status_rules(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+
+    out = df.copy()
+    invest_mask = out["Instrument Type"].fillna("") != "Fee"
+    invest_df = out.loc[invest_mask].copy()
+
+    if invest_df.empty:
+        return out
+
+    for company, group in invest_df.groupby("Company", dropna=False):
+        company_name = "" if pd.isna(company) else str(company).strip()
+        if company_name == "":
+            continue
+
+        company_statuses = set(group["Status"].dropna().astype(str).tolist())
+
+        if "Exited" in company_statuses:
+            company_mask = invest_mask & out["Company"].eq(company_name)
+            out.loc[company_mask, "Status"] = "Exited"
+            out.loc[company_mask, "Current Value"] = 0.0
+        elif "Closed" in company_statuses:
+            company_mask = invest_mask & out["Company"].eq(company_name)
+            out.loc[company_mask, "Status"] = "Closed"
+            out.loc[company_mask, "Current Value"] = 0.0
+        elif "Written Off" in company_statuses:
+            company_mask = invest_mask & out["Company"].eq(company_name)
+            out.loc[company_mask, "Status"] = "Written Off"
+            out.loc[company_mask, "Current Value"] = 0.0
+
+    return out
+
+
 def money_input(label: str, value=0.0, help_text=None, disabled: bool = False, key=None) -> float:
     default_text = f"{float(value):,.0f}" if value not in [None, ""] and not pd.isna(value) else ""
     raw = st.text_input(label, value=default_text, help=help_text, disabled=disabled, key=key)
@@ -241,6 +277,8 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df["Status"] = df["Status"].apply(canonicalize_status)
     df["Source of Deal"] = df["Source of Deal"].fillna("").astype(str).str.strip()
 
+    df = apply_status_value_rules(df)
+    df = apply_company_status_rules(df)
     df = apply_status_value_rules(df)
     df = df.dropna(how="all")
     return df
@@ -619,6 +657,11 @@ def investment_form(existing_row=None, form_key="investment_form", is_new=False)
                     key=f"{form_key}_distributions_edit",
                 )
 
+        if is_new:
+            st.info(
+                "On save, this will be added as a new transaction row with Status = Active, Current Value = Gross Investment, and Distributions = $0."
+            )
+
         submitted = st.form_submit_button("Add Transaction" if is_new else "Save Changes")
 
     if not submitted:
@@ -710,6 +753,17 @@ def build_record_label(row) -> str:
     return f"{date_str} | {company} | {instrument} | Gross {gross} | Dist {distributions}"
 
 
+def apply_company_exit_update(updated_df: pd.DataFrame, company: str, new_status: str) -> pd.DataFrame:
+    if updated_df.empty or not company or new_status not in COMPANY_WIDE_EXIT_STATUSES:
+        return updated_df
+
+    out = updated_df.copy()
+    company_mask = (out["Instrument Type"].fillna("") != "Fee") & out["Company"].eq(company)
+    out.loc[company_mask, "Status"] = new_status
+    out.loc[company_mask, "Current Value"] = 0.0
+    return out
+
+
 title_col, help_col = st.columns([20, 1])
 with title_col:
     st.title("Angel Investment Tracker")
@@ -740,6 +794,7 @@ with help_col:
             TVPI = selected value basis / (Gross Investment + Fees)
             For Exited and Partial Realized, Current Value is reset to zero and value comes from Distributions.
             For Written Off and Closed, Current Value is reset to zero.
+            When a company with follow-on rows is marked Exited, Written Off, or Closed, that status is applied across that company’s investment rows.
             Older statuses such as Converted, Paused, and Other are normalized into Closed.
             For SAFE or Convertible Note deals, use the cap as valuation when there is one.
             If there is no cap, leave valuation blank.
@@ -899,7 +954,9 @@ with tab2:
                 updated = updated.sort_values(["Date", "Company"], ascending=[False, True], na_position="last").reset_index(drop=True)
                 st.session_state.df = updated
                 st.toast("Investment added")
-                st.success("Investment added. Download your CSV to keep it.")
+                st.success(
+                    f"Added new investment for {new_row['Company']} with Status = Active, Current Value = {format_currency_blank(new_row['Current Value'])}, and Distributions = $0."
+                )
                 st.rerun()
 
     with add_fee_tab:
@@ -981,6 +1038,10 @@ with tab3:
                     selected_row.get("Fees", 0)
                 )
 
+                company_name = selected_row.get("Company", "") or ""
+                company_investment_rows = investment_df[investment_df["Company"] == company_name]
+                has_follow_ons = len(company_investment_rows) > 1
+
                 st.markdown("#### Selected Investment")
                 s1, s2, s3, s4 = st.columns(4)
                 s1.metric("Date", selected_date_str)
@@ -995,6 +1056,11 @@ with tab3:
                 s8.metric("Distributions", format_currency_blank(selected_row.get("Distributions", 0)) or "$0")
 
                 st.caption(f"Total Paid: {format_currency_blank(selected_total_paid) or '$0'}")
+
+                if has_follow_ons:
+                    st.info(
+                        f"{company_name} has {len(company_investment_rows):,} investment rows. If you mark this company Exited, Written Off, or Closed, that status will be applied across all of that company’s investment rows."
+                    )
 
                 st.divider()
                 st.markdown("#### Edit Investment")
@@ -1012,11 +1078,24 @@ with tab3:
                         updated = df.copy()
                         for key, value in edited_row.items():
                             updated.at[selected_row_index, key] = value
+
+                        updated = apply_company_exit_update(
+                            updated,
+                            company=edited_row["Company"],
+                            new_status=canonicalize_status(edited_row["Status"]),
+                        )
+
                         updated = normalize_dataframe(updated)
                         updated = updated.sort_values(["Date", "Company"], ascending=[False, True], na_position="last").reset_index(drop=True)
                         st.session_state.df = updated
                         st.toast("Investment updated")
-                        st.success("Investment updated. Download your CSV to keep it.")
+
+                        if canonicalize_status(edited_row["Status"]) in COMPANY_WIDE_EXIT_STATUSES and has_follow_ons:
+                            st.success(
+                                f"Investment updated. {edited_row['Status']} was applied across all {company_name} investment rows."
+                            )
+                        else:
+                            st.success("Investment updated. Download your CSV to keep it.")
                         st.rerun()
 
                 st.divider()
