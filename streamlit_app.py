@@ -563,15 +563,14 @@ def add_row_and_refresh(df: pd.DataFrame, new_row: dict, toast_message: str, suc
 
 
 def build_edit_selection_table(filtered_df: pd.DataFrame, is_fee: bool = False) -> pd.DataFrame:
-    temp = filtered_df.copy().reset_index()
+    temp = filtered_df.copy().reset_index(drop=True)
     temp["Date"] = pd.to_datetime(temp["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
     if is_fee:
-        display = temp[["index", "Date", "Company", "Fees", "Date Added", "Date Updated"]].copy()
+        display = temp[["Date", "Company", "Fees", "Date Added", "Date Updated"]].copy()
         display["Fees"] = display["Fees"].map(format_currency_blank)
         return display.rename(
             columns={
-                "index": "Row ID",
                 "Company": "Organization",
                 "Fees": "Fee Amount",
             }
@@ -579,7 +578,6 @@ def build_edit_selection_table(filtered_df: pd.DataFrame, is_fee: bool = False) 
 
     display = temp[
         [
-            "index",
             "Date",
             "Company",
             "Instrument Type",
@@ -594,7 +592,7 @@ def build_edit_selection_table(filtered_df: pd.DataFrame, is_fee: bool = False) 
     ].copy()
     for col in ["Gross Investment", "Fees", "Current Value", "Distributions"]:
         display[col] = display[col].map(format_currency_blank)
-    return display.rename(columns={"index": "Row ID"})
+    return display
 
 
 def validation_response(message: str) -> dict:
@@ -612,6 +610,32 @@ def build_action_buttons(show_delete: bool, save_label: str):
 
     save_clicked = st.form_submit_button(save_label, type="primary", use_container_width=True)
     return save_clicked, False
+
+
+def build_investment_selector_options(filtered_df: pd.DataFrame):
+    options = []
+    for idx, row in filtered_df.iterrows():
+        date_str = pd.to_datetime(row.get("Date"), errors="coerce")
+        date_str = date_str.strftime("%Y-%m-%d") if pd.notna(date_str) else "N/A"
+        company = row.get("Company", "") or "N/A"
+        instrument = row.get("Instrument Type", "") or "N/A"
+        gross = format_currency_blank(row.get("Gross Investment", 0)) or "$0"
+        fees = format_currency_blank(row.get("Fees", 0)) or "$0"
+        label = f"{date_str} | {company} | {instrument} | Gross {gross} | Fees {fees}"
+        options.append((label, idx))
+    return options
+
+
+def build_fee_selector_options(filtered_df: pd.DataFrame):
+    options = []
+    for idx, row in filtered_df.iterrows():
+        date_str = pd.to_datetime(row.get("Date"), errors="coerce")
+        date_str = date_str.strftime("%Y-%m-%d") if pd.notna(date_str) else "N/A"
+        org = row.get("Company", "") or "N/A"
+        fee_amount = format_currency_blank(row.get("Fees", 0)) or "$0"
+        label = f"{date_str} | {org} | Fee {fee_amount}"
+        options.append((label, idx))
+    return options
 
 
 def investment_form(
@@ -1187,15 +1211,16 @@ with tab3:
                 selection_table = build_edit_selection_table(filtered, is_fee=False)
                 st.dataframe(selection_table, use_container_width=True, hide_index=True)
 
-                selected_row_index = st.number_input(
-                    "Row ID to edit",
-                    min_value=int(selection_table["Row ID"].min()),
-                    max_value=int(selection_table["Row ID"].max()),
-                    value=int(selection_table["Row ID"].iloc[0]),
-                    step=1,
-                    key="selected_investment_row_id",
-                )
+                selector_options = build_investment_selector_options(filtered)
+                selector_labels = [label for label, _ in selector_options]
+                selector_map = {label: idx for label, idx in selector_options}
 
+                selected_label = st.selectbox(
+                    "Investment transaction to edit",
+                    options=selector_labels,
+                    key="selected_investment_transaction_label",
+                )
+                selected_row_index = selector_map[selected_label]
                 selected_row = df.loc[selected_row_index].to_dict()
 
                 selected_date = pd.to_datetime(selected_row.get("Date"), errors="coerce")
@@ -1309,15 +1334,16 @@ with tab3:
                 selection_table = build_edit_selection_table(filtered, is_fee=True)
                 st.dataframe(selection_table, use_container_width=True, hide_index=True)
 
-                selected_row_index = st.number_input(
-                    "Row ID to edit",
-                    min_value=int(selection_table["Row ID"].min()),
-                    max_value=int(selection_table["Row ID"].max()),
-                    value=int(selection_table["Row ID"].iloc[0]),
-                    step=1,
-                    key="selected_fee_row_id",
-                )
+                selector_options = build_fee_selector_options(filtered)
+                selector_labels = [label for label, _ in selector_options]
+                selector_map = {label: idx for label, idx in selector_options}
 
+                selected_label = st.selectbox(
+                    "Fee record to edit",
+                    options=selector_labels,
+                    key="selected_fee_transaction_label",
+                )
+                selected_row_index = selector_map[selected_label]
                 selected_row = df.loc[selected_row_index].to_dict()
 
                 selected_date = pd.to_datetime(selected_row.get("Date"), errors="coerce")
